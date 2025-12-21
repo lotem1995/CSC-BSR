@@ -1,0 +1,10 @@
+{
+  "model_name": "qwen3-vl:32b",
+  "ollama_api_base": "http://localhost:11434",
+  "max_tokens": 512,
+  "temperature": 0.3,
+  "train_split": 0.8,
+  "val_split": 0.1,
+  "test_split": 0.1,
+  "metric": "f1"
+}

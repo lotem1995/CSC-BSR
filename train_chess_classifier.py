@@ -15,6 +15,7 @@ import json
 import argparse
 import logging
 from pathlib import Path
+import base64
 from datetime import datetime
 
 import dspy
@@ -47,8 +48,12 @@ from dspy_chess_classifier import (
     DSPyOptimizer,
     FineTuneTrainer,
 )
-
-
+def file_to_b64(path: str) -> str:
+    data = Path(path).read_bytes()
+    b64 = base64.b64encode(data).decode("utf-8")
+    # Validate locally (catches “path string” etc.)
+    base64.b64decode(b64, validate=True)
+    return b64
 # ============================================================================
 # Setup Logging for Cluster
 # ============================================================================
@@ -398,8 +403,8 @@ def parse_arguments():
     parser.add_argument(
         '--model',
         type=str,
-        default='qwen2.5-vl:7b',
-        choices=['qwen2.5-vl:7b', 'qwen2.5-vl:32b', 'llama3.2-vision:11b'],
+        default='qwen3-vl:7b',
+        choices=['qwen3-vl:7b', 'qwen3-vl:32b', 'llama3.2-vision:11b'],
         help='Model name'
     )
     
