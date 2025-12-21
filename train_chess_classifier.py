@@ -370,7 +370,7 @@ def parse_arguments():
     parser.add_argument(
         '--data-root',
         type=str,
-        default='/storage/users/user/chess_classifier/data',
+        default=os.path.join(os.path.expanduser('~'), 'chess_classifier/data'),
         help='Path to dataset directory'
     )
     

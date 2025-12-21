@@ -24,8 +24,8 @@ echo "SLURM_JOB_NODELIST=$SLURM_JOB_NODELIST"
 echo "SLURM_GPUS=$SLURM_GPUS"
 
 # Set working directory to cluster storage
-cd /storage/users/$USER/chess_classifier || exit 1
-
+cd $HOME/chess_classifier || exit 1
+echo "Working directory: $(pwd)"
 # Make sure you're not in conda environment when submitting!
 conda deactivate 2>/dev/null || true
 
@@ -47,7 +47,7 @@ echo "Setting up conda environment..."
 # conda create -n chess_dspy python=3.11 -y
 
 # Activate environment
-source activate chess_dspy
+conda activate chess_dspy
 
 # Install required packages (run these manually first: pip install dspy-ai torch torchvision)
 # Or uncomment to auto-install on first run:
@@ -69,7 +69,7 @@ echo "Starting Ollama server..."
 # Start Ollama server in background
 export OLLAMA_NUM_PARALLEL=1           # Limit parallel requests
 export OLLAMA_NUM_GPU=1                # Use single GPU
-export OLLAMA_MODELS=/storage/users/$USER/.ollama/models  # Store models in storage
+export OLLAMA_MODELS=$HOME/.ollama/models  # Store models in storage
 
 # Check if Ollama is available
 if command -v ollama &> /dev/null; then
@@ -108,12 +108,12 @@ mkdir -p logs
 
 # Data is stored at: /storage/users/$USER/chess_classifier/data/
 # OR copy from shared storage if available
-DATA_ROOT="/storage/users/$USER/chess_classifier/data"
+DATA_ROOT="$HOME/chess_classifier/data"
 
 if [ ! -d "$DATA_ROOT" ]; then
     echo "⚠️ Data directory not found at $DATA_ROOT"
     echo "Make sure you have uploaded your data with:"
-    echo "  scp -r local_data/* $USER@slurm.bgu.ac.il:/storage/users/$USER/chess_classifier/data/"
+    echo "  scp -r local_data/* $USER@slurm.bgu.ac.il:~/chess_classifier/data/"
 fi
 
 # Optional: Use /scratch for faster I/O on local node SSD
