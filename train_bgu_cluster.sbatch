@@ -57,44 +57,55 @@ source activate chess_dspy
 ## Ollama Setup (Local Model Server)
 ## ============================================================================
 
-echo "Starting Ollama server..."
+echo "Configuring Ollama..."
 
-## Option 1: Ollama from pre-installed location on cluster
-## module load ollama  (if available)
+## If using pre-installed Ollama on cluster, add to PATH
 OLLAMA_DIR="$HOME/ollama_install"
-OLLAMA_BINARY="$OLLAMA_DIR/bin/ollama"
-## Option 2: Pre-download Qwen2.5-VL model locally (RECOMMENDED)
-## Run on login node once:
-## ollama pull qwen2.5-vl:32b  #(or qwen2.5-vl:32b for better accuracy)
+if [ -d "$OLLAMA_DIR/bin" ]; then
+    export PATH="$OLLAMA_DIR/bin:$PATH"
+    echo "  Ollama path set: $OLLAMA_DIR/bin"
+fi
 
 ## Start Ollama server in background
 export OLLAMA_NUM_PARALLEL=1           ## Limit parallel requests
 export OLLAMA_NUM_GPU=1                ## Use single GPU
 export OLLAMA_MODELS=$HOME/.ollama/models  ## Store models in storage
 
-## Check if Ollama is available
+echo "Starting Ollama server (with 30s timeout check)..."
+
 if command -v ollama &> /dev/null; then
-    echo "Starting Ollama server..."
+    echo "  ✅ Ollama found in PATH"
     ollama serve > ollama_server.log 2>&1 &
     OLLAMA_PID=$!
-    echo "Ollama PID: $OLLAMA_PID"
-    sleep 10  ## Wait for server to start
+    echo "  Ollama PID: $OLLAMA_PID"
+    sleep 15  ## Wait longer for GPU model to initialize
 else
-    echo "⚠️ Ollama not found. Installing..."
-    pip install ollama
+    echo "  ⚠️  Ollama not in PATH. Attempting to install..."
+    if ! pip install ollama --quiet; then
+        echo "  ❌ Failed to install ollama pip package"
+        exit 1
+    fi
     ollama serve > ollama_server.log 2>&1 &
     OLLAMA_PID=$!
+    echo "  Ollama PID: $OLLAMA_PID"
     sleep 15
 fi
 
-## Verify Ollama is running
-if ! curl -s http://localhost:11434/api/tags > /dev/null; then
-    echo "❌ Ollama server failed to start!"
-    tail -20 ollama_server.log
-    exit 1
-fi
-
-echo "✅ Ollama server running"
+## Verify Ollama is running (with retries)
+echo "Waiting for Ollama server to be ready..."
+for i in {1..10}; do
+    if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+        echo "✅ Ollama server is ready"
+        break
+    fi
+    if [ $i -eq 10 ]; then
+        echo "❌ Ollama server failed to start after 30 seconds"
+        echo "Last 30 lines of ollama_server.log:"
+        tail -30 ollama_server.log
+        exit 1
+    fi
+    sleep 3
+done
 
 ## ============================================================================
 ## Data Setup (Handle Cluster Storage Paths)

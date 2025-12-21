@@ -45,13 +45,33 @@ from dspy_chess_classifier import (
     ChessboardDataset,
     load_real_dataset,
     evaluate,
+    piece_metric,
     DSPyOptimizer,
     FineTuneTrainer,
 )
+def log_versions(logger):
+    """Log library versions for reproducibility."""
+    try:
+        import dspy
+        logger.info(f"DSPy version: {dspy.__version__}")
+    except:
+        logger.warning("Could not determine DSPy version")
+    
+    try:
+        import litellm
+        logger.info(f"litellm version: {litellm.__version__}")
+    except:
+        logger.warning("Could not determine litellm version")
+    
+    try:
+        logger.info(f"Python version: {sys.version.split()[0]}")
+        logger.info(f"Torch version: {torch.__version__}")
+    except:
+        pass
+
 def file_to_b64(path: str) -> str:
     data = Path(path).read_bytes()
     b64 = base64.b64encode(data).decode("utf-8")
-    # Validate locally (catches “path string” etc.)
     base64.b64decode(b64, validate=True)
     return b64
 # ============================================================================
@@ -222,6 +242,7 @@ def train_classifier(args):
     try:
         lm = setup_dspy(config)
         logger.info("  ✅ DSPy configured successfully")
+        log_versions(logger)
     except Exception as e:
         logger.error(f"  ❌ Failed to setup DSPy: {e}")
         return 1
@@ -333,15 +354,23 @@ def train_classifier(args):
     checkpoint_manager = CheckpointManager(args.checkpoint_dir)
     
     try:
+        # Save classifier using DSPy's save() method (not pickle)
+        classifier_path = Path(args.checkpoint_dir) / "classifier_final.json"
+        try:
+            classifier.save(str(classifier_path))
+            logger.info(f"  ✅ Classifier saved to {classifier_path}")
+        except Exception as e:
+            # Fallback: try pickle if DSPy save() fails
+            logger.warning(f"  Could not use DSPy save(): {e}")
+            logger.info("  Falling back to pickle...")
+            import pickle
+            classifier_path_pkl = Path(args.checkpoint_dir) / "classifier_final.pkl"
+            with open(classifier_path_pkl, 'wb') as f:
+                pickle.dump(classifier, f)
+            logger.info(f"  ✅ Classifier saved to {classifier_path_pkl}")
+        
         # Save config
         checkpoint_manager.save_config(config)
-        
-        # Save classifier
-        import pickle
-        classifier_path = Path(args.checkpoint_dir) / "classifier_final.pkl"
-        with open(classifier_path, 'wb') as f:
-            pickle.dump(classifier, f)
-        logger.info(f"  ✅ Classifier saved to {classifier_path}")
         
         # Save metrics
         metrics = {
