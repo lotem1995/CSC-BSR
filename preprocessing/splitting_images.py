@@ -2,7 +2,8 @@ import os
 from PIL import Image
 
 
-def slice_image_with_coordinates(image_path, output_folder, board, overlap_percent=0.0, final_size=(224, 224)):
+def slice_image_with_coordinates(image_path, output_folder, board, overlap_percent=0.0, final_size=(224, 224),
+                                 zero_padding=True):
     """
     Slices an image into an 8x8 grid with overlap, resizing inputs,
     and saving with Row/Col filenames.
@@ -41,10 +42,11 @@ def slice_image_with_coordinates(image_path, output_folder, board, overlap_perce
             lower = center_y + (crop_h / 2)
 
             # 3. Handle Edges (Clamp)
-            left = max(0, left)
-            upper = max(0, upper)
-            right = min(img_width, right)
-            lower = min(img_height, lower)
+            if not zero_padding:
+                left = max(0, left)
+                upper = max(0, upper)
+                right = min(img_width, right)
+                lower = min(img_height, lower)
 
             # 4. Crop
             tile = img.crop((left, upper, right, lower))
@@ -61,4 +63,3 @@ def slice_image_with_coordinates(image_path, output_folder, board, overlap_perce
             tile_filename = f"{name_only}_tile_row{r}_column{c}_class{board[r, c]}.png"
             tile_path = os.path.join(output_folder, tile_filename)
             tile.save(tile_path)
-
