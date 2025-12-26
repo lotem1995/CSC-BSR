@@ -474,7 +474,6 @@ class DSPyOptimizer:
         })
         print(f"Step {step}: {metrics}")
 
-
 class FineTuneTrainer:
     """Fine-tuning trainer for the classifier."""
     
