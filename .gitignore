@@ -210,11 +210,14 @@ __marimo__/
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 <<<<<<< HEAD
+<<<<<<< HEAD
 
 
 #Ignore cursor AI rules
 =======
 >>>>>>> d3e2df60 (pre processed data is now a ready-to-go dataset)
+=======
+>>>>>>> 47fb7555 (dspy: can't talk with vlm with images in the current version :()
 .cursor/rules/codacy.mdc
 
 # Preprocessed datasets (can be regenerated from raw data)
@@ -226,3 +229,9 @@ embeddings/
 # Keep raw data but ignore large processed outputs
 checkpoints/
 *.err
+=======
+
+
+#Ignore cursor AI rules
+.cursor/rules/codacy.mdc
+>>>>>>> 29d7d605 (dspy: can't talk with vlm with images in the current version :()
