@@ -209,7 +209,10 @@ __marimo__/
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
+<<<<<<< HEAD
 
 
 #Ignore cursor AI rules
+=======
+>>>>>>> d3e2df60 (pre processed data is now a ready-to-go dataset)
 .cursor/rules/codacy.mdc
