@@ -1,0 +1,21 @@
+# Source game data (CSV + tagged_images) and where to write square tiles
+data_root: ./data
+raw_tiles_dir: ./preprocessed_data
+
+# Tile extraction parameters
+tile_size: [224, 224]
+tile_overlap: 0.7
+zero_padding: true
+
+# Optional Qwen3-VL embeddings (one .npy per tile). Set to null if unused.
+embedding_dir: ./embeddings
+embedding_ext: .npy
+
+# Train/Val/Test split ratios (must sum to 1.0)
+split:
+  train: 0.8
+  val: 0.1
+  test: 0.1
+
+# Reproducibility seed
+seed: 42
