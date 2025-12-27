@@ -210,3 +210,13 @@ __marimo__/
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
 .cursor/rules/codacy.mdc
+
+# Preprocessed datasets (can be regenerated from raw data)
+preprocessed_data/
+data/splits/
+data/dataset_manifest.json
+embeddings/
+
+# Keep raw data but ignore large processed outputs
+checkpoints/
+*.err
