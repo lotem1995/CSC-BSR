@@ -209,3 +209,4 @@ __marimo__/
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
+.cursor/rules/codacy.mdc
