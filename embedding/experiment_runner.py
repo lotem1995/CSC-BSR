@@ -41,7 +41,7 @@ def run(label, args_list):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--splits-dir", default="data/splits")
-    p.add_argument("--path-root", default="data")
+    p.add_argument("--path-root", default=".")
     p.add_argument("--epochs", type=int, default=int(os.environ.get("EPOCHS", 1)))
     p.add_argument("--batch-size", type=int, default=int(os.environ.get("BATCH_SIZE", 2)))
     p.add_argument("--num-workers", type=int, default=int(os.environ.get("NUM_WORKERS", 2)))

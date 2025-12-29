@@ -25,7 +25,7 @@ cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs checkpoints results
 
 # Conda/venv activation (edit as needed)
-module load cuda/12.1
+module load cuda/13
 # source ~/miniconda3/bin/activate chess_env
 echo "Working directory: $(pwd)"
 ## Make sure you're not in conda environment when submitting!
@@ -41,11 +41,11 @@ BATCH_SIZE=${BATCH_SIZE:-2}
 NUM_WORKERS=${NUM_WORKERS:-2}
 EPOCHS=${EPOCHS:-1}
 SPLITS_DIR=${SPLITS_DIR:-data/splits}
-DATA_ROOT=${DATA_ROOT:-data}
+DATA_ROOT=${DATA_ROOT:.}
 EMBEDDING_BACKBONE=${EMBEDDING_BACKBONE:-qwen}  # qwen|dino-small|dino-base
 
 # Run all scenarios sequentially (Qwen/DINO head-only, Qwen LoRA, DINO backbone)
-python embedding/experiment_runner.py \
+PYTHONPATH=. python embedding/experiment_runner.py \
   --splits-dir "$SPLITS_DIR" \
   --path-root "$DATA_ROOT" \
   --epochs "$EPOCHS" \
