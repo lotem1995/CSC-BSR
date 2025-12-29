@@ -1,15 +1,23 @@
 import torch
 from PIL import Image
 from typing import List
+import sys
+import os
 # Qwen3-VL uses the same class structure as Qwen2 but with improved weights/ViT
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
 
-class QwenVisionEmbedding:
+sys.path.insert(0, os.path.dirname(__file__))
+from embedding_base import EmbeddingModel
+
+
+class QwenVisionEmbedding(EmbeddingModel):
     def __init__(self, model_name: str = "Qwen/Qwen3-VL-2B-Instruct"):
-        self.device = torch.device("cuda")
+        # Allow overriding model and device map for cluster runs (single 11GB GPU)
+        resolved_model = os.getenv("QWEN_MODEL_NAME", model_name)
+        device_map = os.getenv("QWEN_DEVICE_MAP") or ("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # 4-bit Quantization: Cuts VRAM usage from 5GB down to ~2GB
-        # This leaves plenty of room for your MCTS tree and other RL logic
         bnb_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.bfloat16,
@@ -18,16 +26,15 @@ class QwenVisionEmbedding:
         )
 
         self.model = Qwen3VLForConditionalGeneration.from_pretrained(
-            model_name,
+            resolved_model,
             quantization_config=bnb_config,
-            device_map="auto", # Automatically uses your 4070
+            device_map=device_map,
             trust_remote_code=True
         ).eval()
         
         # Optimization: Limit pixels since chess squares are small
-        # This speeds up the vision tower significantly
         self.processor = AutoProcessor.from_pretrained(
-            model_name, 
+            resolved_model, 
             trust_remote_code=True,
             min_pixels=128*28, 
             max_pixels=256*28
@@ -98,6 +105,10 @@ class QwenVisionEmbedding:
         # Stack all embeddings
         batch_embeddings = torch.cat(batch_embeddings, dim=0)
         return batch_embeddings.cpu()
+    
+    def get_embedding_dim(self) -> int:
+        """Return the dimension of Qwen embeddings (2048)"""
+        return 2048
 
 if __name__ == "__main__":
     # Test with the 2B model
