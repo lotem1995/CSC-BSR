@@ -23,15 +23,25 @@ from tqdm import tqdm
 from typing import Tuple, Dict, Optional
 from pathlib import Path
 
-sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
-from load_dataset import ChessTilesCSV
+from preprocessing.load_dataset import ChessTilesCSV
 from sklearn.metrics import balanced_accuracy_score, f1_score
 
-sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/embadding')
 from embedding_base import EmbeddingModel
-from main import QwenVisionEmbedding
 from dinov2 import DINOv2Embedding
-from lorafinetune import QwenLoRAFineTuner
+
+
+def _is_qwen_embedding_model(model: Optional[EmbeddingModel]) -> bool:
+    return model is not None and model.__class__.__name__ == "QwenVisionEmbedding"
+
+
+def _is_dino_embedding_model(model: Optional[EmbeddingModel]) -> bool:
+    return model is not None and model.__class__.__name__ == "DINOv2Embedding"
+
+
+def _load_qwen_embedding_class():
+    # Lazy import: avoids importing transformers unless Qwen is requested.
+    from main import QwenVisionEmbedding
+    return QwenVisionEmbedding
 
 # Piece label mapping
 PIECE_LABELS = {
@@ -45,6 +55,31 @@ PIECE_LABELS = {
 }
 
 PIECE_TO_ID = {v: k for k, v in PIECE_LABELS.items()}
+
+# The dataset labels are stored as raw piece IDs (0..16 with gaps),
+# but the classifier predicts 13 contiguous classes.
+_RAW_LABELS_IN_ORDER = [0, 1, 2, 3, 4, 5, 6, 11, 12, 13, 14, 15, 16]
+_LABEL_LUT = torch.full((17,), -1, dtype=torch.long)
+for _class_idx, _raw_id in enumerate(_RAW_LABELS_IN_ORDER):
+    _LABEL_LUT[_raw_id] = _class_idx
+
+
+def _remap_raw_piece_labels(raw_labels: torch.Tensor) -> torch.Tensor:
+    """Map raw piece IDs to contiguous class indices for CrossEntropyLoss."""
+    if raw_labels.dtype != torch.long:
+        raw_labels = raw_labels.long()
+    if raw_labels.numel() == 0:
+        return raw_labels
+    if raw_labels.min().item() < 0 or raw_labels.max().item() >= _LABEL_LUT.numel():
+        raise ValueError(
+            f"Found label outside expected range [0, 16]: min={raw_labels.min().item()}, max={raw_labels.max().item()}"
+        )
+    lut = _LABEL_LUT.to(device=raw_labels.device)
+    mapped = lut[raw_labels]
+    if (mapped < 0).any():
+        bad = raw_labels[mapped < 0].unique().tolist()
+        raise ValueError(f"Found unsupported raw labels: {bad}. Expected one of {_RAW_LABELS_IN_ORDER}.")
+    return mapped
 
 
 class FineTuner:
@@ -67,7 +102,7 @@ class FineTuner:
         self.embedding_model = embedding_model
         if self.embedding_model is None:
             print("Initializing default QwenVisionEmbedding...")
-            self.embedding_model = QwenVisionEmbedding()
+            self.embedding_model = _load_qwen_embedding_class()()
         
         embedding_dim = self.embedding_model.get_embedding_dim()
         print(f"Using {self.embedding_model} for fine-tuning")
@@ -93,7 +128,11 @@ class FineTuner:
     
     def extract_embedding(self, image: Image.Image) -> torch.Tensor:
         """Extract embedding using the embedding model"""
-        return self.embedding_model.extract_embedding(image).to(self.device)
+        embedding = self.embedding_model.extract_embedding(image).to(self.device)
+        target_dtype = next(self.classifier.parameters()).dtype
+        if embedding.dtype != target_dtype:
+            embedding = embedding.to(dtype=target_dtype)
+        return embedding
     
     def train_batch(self, batch: Dict) -> float:
         """
@@ -121,9 +160,13 @@ class FineTuner:
         # Extract embeddings using the embedding model
         embeddings = self.embedding_model.extract_batch_embeddings(images)
         embeddings = embeddings.to(self.device)
+        target_dtype = next(self.classifier.parameters()).dtype
+        if embeddings.dtype != target_dtype:
+            embeddings = embeddings.to(dtype=target_dtype)
         
         # Classify
         labels = labels.to(self.device)
+        labels = _remap_raw_piece_labels(labels)
         logits = self.classifier(embeddings)
         
         # Compute loss
@@ -162,9 +205,13 @@ class FineTuner:
             # Extract embeddings using the embedding model
             embeddings = self.embedding_model.extract_batch_embeddings(images)
             embeddings = embeddings.to(self.device)
+            target_dtype = next(self.classifier.parameters()).dtype
+            if embeddings.dtype != target_dtype:
+                embeddings = embeddings.to(dtype=target_dtype)
             
             # Classify
             labels = labels.to(self.device)
+            labels = _remap_raw_piece_labels(labels)
             logits = self.classifier(embeddings)
             loss = self.criterion(logits, labels)
             
@@ -199,6 +246,8 @@ class QwenLoRAClassifierTrainer:
     """LoRA fine-tuning for Qwen visual tower + classifier head with metrics."""
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Lazy import: avoids importing transformers/peft unless LoRA is requested.
+        from lorafinetune import QwenLoRAFineTuner
         self.qwen = QwenLoRAFineTuner()
         # Qwen3-VL vision embedding dimension
         embedding_dim = 2048
@@ -234,12 +283,16 @@ class QwenLoRAClassifierTrainer:
         self.classifier.train()
         image_tensors = batch["image"]
         labels = batch["label"].to(self.device)
+        labels = _remap_raw_piece_labels(labels)
         # Convert tensors to PIL
         images = []
         for img_tensor in image_tensors:
             img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
             images.append(Image.fromarray(img_np))
         embeddings = self._batch_embeddings(images)
+        target_dtype = next(self.classifier.parameters()).dtype
+        if embeddings.dtype != target_dtype:
+            embeddings = embeddings.to(dtype=target_dtype)
         logits = self.classifier(embeddings)
         loss = self.criterion(logits, labels)
         self.optimizer.zero_grad()
@@ -253,11 +306,15 @@ class QwenLoRAClassifierTrainer:
         self.classifier.eval()
         image_tensors = batch["image"]
         labels = batch["label"].to(self.device)
+        labels = _remap_raw_piece_labels(labels)
         images = []
         for img_tensor in image_tensors:
             img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
             images.append(Image.fromarray(img_np))
         embeddings = self._batch_embeddings(images)
+        target_dtype = next(self.classifier.parameters()).dtype
+        if embeddings.dtype != target_dtype:
+            embeddings = embeddings.to(dtype=target_dtype)
         logits = self.classifier(embeddings)
         loss = nn.CrossEntropyLoss()(logits, labels)
         preds = logits.argmax(dim=1)
@@ -308,6 +365,7 @@ class DINOBackboneFineTuner:
         self.classifier.train()
         x = self._to_batch(batch["image"])
         labels = batch["label"].to(self.device)
+        labels = _remap_raw_piece_labels(labels)
         feats = self.model(x)
         logits = self.classifier(feats)
         loss = self.criterion(logits, labels)
@@ -322,6 +380,7 @@ class DINOBackboneFineTuner:
         self.classifier.eval()
         x = self._to_batch(batch["image"])
         labels = batch["label"].to(self.device)
+        labels = _remap_raw_piece_labels(labels)
         feats = self.model(x)
         logits = self.classifier(feats)
         loss = nn.CrossEntropyLoss()(logits, labels)
@@ -362,7 +421,7 @@ def train_fine_tuning(
     print("=" * 80)
     if embedding_model is None:
         print("FINE-TUNING QWEN ON CHESS DATA")
-        embedding_model = QwenVisionEmbedding()
+        embedding_model = _load_qwen_embedding_class()()
     else:
         print(f"FINE-TUNING {embedding_model} ON CHESS DATA")
     print("=" * 80)
@@ -418,11 +477,11 @@ def train_fine_tuning(
     
     # Initialize fine-tuner per strategy
     if strategy == "lora":
-        if embedding_model is not None and not isinstance(embedding_model, QwenVisionEmbedding):
+        if embedding_model is not None and not _is_qwen_embedding_model(embedding_model):
             print("Warning: --strategy lora is only supported with Qwen; overriding to Qwen.")
         fine_tuner = QwenLoRAClassifierTrainer()
     elif strategy == "backbone":
-        if isinstance(embedding_model, DINOv2Embedding):
+        if _is_dino_embedding_model(embedding_model):
             fine_tuner = DINOBackboneFineTuner(embedding_model)
         else:
             print("Warning: --strategy backbone is only supported with DINO; falling back to head-only.")
@@ -506,7 +565,7 @@ if __name__ == "__main__":
         embedding_model = None
     else:
         if args.embedding_model == "qwen":
-            embedding_model = QwenVisionEmbedding()
+            embedding_model = _load_qwen_embedding_class()()
         elif args.embedding_model == "dino-small":
             embedding_model = DINOv2Embedding(model_size="small")
         elif args.embedding_model == "dino-base":

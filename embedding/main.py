@@ -3,8 +3,7 @@ from PIL import Image
 from typing import List
 import sys
 import os
-# Qwen3-VL uses the same class structure as Qwen2 but with improved weights/ViT
-from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
+
 
 sys.path.insert(0, os.path.dirname(__file__))
 from embedding_base import EmbeddingModel
@@ -12,6 +11,9 @@ from embedding_base import EmbeddingModel
 
 class QwenVisionEmbedding(EmbeddingModel):
     def __init__(self, model_name: str = "Qwen/Qwen3-VL-2B-Instruct"):
+        # Lazy import: keeps DINO-only workflows from importing transformers.
+        from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
+
         # Allow overriding model and device map for cluster runs (single 11GB GPU)
         resolved_model = os.getenv("QWEN_MODEL_NAME", model_name)
         device_map = os.getenv("QWEN_DEVICE_MAP") or ("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -69,7 +71,7 @@ class QwenVisionEmbedding(EmbeddingModel):
         # Global Average Pooling to get a 1D vector (embedding)
         embedding = torch.mean(visual_features, dim=0)
             
-        return embedding.cpu()
+        return embedding.float().cpu()
     
     @torch.no_grad()
     def extract_batch_embeddings(self, images: List[Image.Image]) -> torch.Tensor:
@@ -104,7 +106,7 @@ class QwenVisionEmbedding(EmbeddingModel):
         
         # Stack all embeddings
         batch_embeddings = torch.cat(batch_embeddings, dim=0)
-        return batch_embeddings.cpu()
+        return batch_embeddings.float().cpu()
     
     def get_embedding_dim(self) -> int:
         """Return the dimension of Qwen embeddings (2048)"""

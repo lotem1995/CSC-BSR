@@ -235,3 +235,4 @@ checkpoints/
 #Ignore cursor AI rules
 .cursor/rules/codacy.mdc
 >>>>>>> 29d7d605 (dspy: can't talk with vlm with images in the current version :()
+embedding/.codacy/cli.sh
