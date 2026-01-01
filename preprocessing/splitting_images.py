@@ -2,7 +2,8 @@ import os
 from PIL import Image
 
 
-def slice_image_with_coordinates(image_path, output_folder, board, overlap_percent=0.0, final_size=(224, 224),
+def slice_image_with_coordinates(game_number, image_path, output_folder, board, overlap_percent=0.0,
+                                 final_size=(224, 224),
                                  zero_padding=True):
     """
     Slices an image into an 8x8 grid with overlap, resizing inputs,
@@ -60,6 +61,6 @@ def slice_image_with_coordinates(image_path, output_folder, board, overlap_perce
             filename = os.path.basename(image_path)
             # Split the name and the extension, and take the first part
             name_only = os.path.splitext(filename)[0]
-            tile_filename = f"{name_only}_tile_row{r}_column{c}_class{board[r, c]}.png"
+            tile_filename = f"game{game_number}_{name_only}_tile_row{r}_column{c}_class{board[r, c]}.png"
             tile_path = os.path.join(output_folder, tile_filename)
             tile.save(tile_path)
