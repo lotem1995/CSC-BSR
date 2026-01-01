@@ -1,28 +1,9 @@
-import os
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
-from torchvision import datasets, transforms
-from torch.utils.data import DataLoader
 from tqdm import tqdm
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-
-from VAE.dataset import FilenameDataset
-
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-# --- Configuration ---
-BATCH_SIZE = 128
-LEARNING_RATE = 1e-3
-EPOCHS = 10
-LATENT_DIM = 20  # Size of the compressed "bottleneck"
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class VAE(nn.Module):
@@ -91,41 +72,7 @@ def loss_function(recon_x, x, mu, logvar):
 
     return MSE + KLD
 
-def train(train_loader):
-    model = VAE().to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
-    print(f"Training VAE on {DEVICE}...")
-
-    model.train()
-
-    for epoch in range(EPOCHS):
-        # Wrap the loader with tqdm for the progress bar
-        loop = tqdm(train_loader, leave=True)
-
-        total_loss = 0
-
-        for batch_idx, (data, _) in enumerate(loop):
-            data = data.to(DEVICE)
-            optimizer.zero_grad()
-
-            # Forward pass
-            recon_batch, mu, logvar = model(data)
-
-            # Calculate loss
-            loss = loss_function(recon_batch, data, mu, logvar)
-
-            # Backward pass
-            loss.backward()
-            total_loss += loss.item()
-            optimizer.step()
-
-            # Update the progress bar text
-            loop.set_description(f"Epoch [{epoch + 1}/{EPOCHS}]")
-            loop.set_postfix(loss=loss.item())
-
-    print("Training Complete!")
-    return model
 
 
 
