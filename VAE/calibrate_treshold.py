@@ -10,9 +10,10 @@ from torchvision import transforms
 from tqdm import tqdm
 
 from VAE.VAE_nn import VAE
-from VAE.dataset import FilenameDataset
 # Your existing import
 from VAE.train_VAE import BATCH_SIZE
+from preprocessing.load_dataset import ChessTilesCSV
+from pathlib import Path
 
 
 def get_anomaly_score(model, image):
@@ -78,8 +79,8 @@ def calibrate_threshold(model, val_loader, device):
 
     print("Calibrating threshold on normal data...")
     with torch.no_grad():
-        for data, _ in tqdm(val_loader):
-            data = data.to(device)
+        for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+            data=batch["image"].to(DEVICE)
             # Reconstruct
             recon, _, _ = model(data)
 
@@ -159,13 +160,39 @@ if __name__ == "__main__":
 
     # ... Assume 'model' and 'train_loader' are loaded here ...
     model = VAE()
-    model.load_state_dict(torch.load('model_weights.pth'))
-    script_path = os.path.abspath(__file__)
-    script_dir = os.path.dirname(script_path)
-    parent_dir = os.path.abspath(os.path.join(script_dir, '..'))
-    data_dir = os.path.join(parent_dir, 'preprocessed_data')
-    train_dataset = FilenameDataset(img_dir=data_dir)
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    model.load_state_dict(torch.load('VAE\\model_weights.pth'))
+
+    splits_dir = Path("data/splits")
+    path_root = Path("data")
+    # Load datasets using ChessTilesCSV
+    splits_dir_path = Path(splits_dir)
+    path_root_path = Path(path_root)
+
+    train_csv = splits_dir_path / "train.csv"
+    val_csv = splits_dir_path / "val.csv"
+
+    if not train_csv.exists():
+        raise FileNotFoundError(
+            f"Training CSV not found at {train_csv}. "
+            "Please run build_dataset.py first to create the dataset."
+        )
+
+    print(f"Loading training data from {train_csv}")
+    train_dataset = ChessTilesCSV(
+        csv_path=str(train_csv),
+        root=str(path_root_path),
+        transform=None,
+        use_embeddings=False
+    )
+
+    print(f"Training dataset size: {len(train_dataset)}")
+
+    # Create dataloader
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True
+    )
 
     # 2. Calibrate (Calculate threshold ONCE)
     threshold = calibrate_threshold(model, train_loader, DEVICE)

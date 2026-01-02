@@ -7,16 +7,17 @@ import torch.optim as optim
 from tqdm import tqdm
 
 from VAE.VAE_nn import VAE, loss_function
-from VAE.dataset import FilenameDataset
+from pathlib import Path
 
 
 import torch
 
+from preprocessing.load_dataset import ChessTilesCSV
 
 # --- Configuration ---
 BATCH_SIZE = 128
 LEARNING_RATE = 1e-3
-EPOCHS = 10
+EPOCHS = 1
 LATENT_DIM = 20  # Size of the compressed "bottleneck"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -29,13 +30,10 @@ def train(train_loader):
     model.train()
 
     for epoch in range(EPOCHS):
-        # Wrap the loader with tqdm for the progress bar
-        loop = tqdm(train_loader, leave=True)
-
         total_loss = 0
 
-        for batch_idx, (data, _) in enumerate(loop):
-            data = data.to(DEVICE)
+        for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+            data = batch["image"].to(DEVICE)
             optimizer.zero_grad()
 
             # Forward pass
@@ -49,24 +47,41 @@ def train(train_loader):
             total_loss += loss.item()
             optimizer.step()
 
-            # Update the progress bar text
-            loop.set_description(f"Epoch [{epoch + 1}/{EPOCHS}]")
-            loop.set_postfix(loss=loss.item())
-
     print("Training Complete!")
     return model
 
 if __name__ == "__main__":
-    script_path = os.path.abspath(__file__)
-    script_dir = os.path.dirname(script_path)
-    parent_dir = os.path.abspath(os.path.join(script_dir, '..'))
-    data_dir = os.path.join(parent_dir, 'preprocessed_data')
+    splits_dir = Path("data/splits")
+    path_root = Path("data")
+    # Load datasets using ChessTilesCSV
+    splits_dir_path = Path(splits_dir)
+    path_root_path = Path(path_root)
 
-    train_dataset = FilenameDataset(img_dir=data_dir)
+    train_csv = splits_dir_path / "train.csv"
+    val_csv = splits_dir_path / "val.csv"
 
-    # Load Data
-    transform = transforms.ToTensor()
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+    if not train_csv.exists():
+        raise FileNotFoundError(
+            f"Training CSV not found at {train_csv}. "
+            "Please run build_dataset.py first to create the dataset."
+        )
+
+    print(f"Loading training data from {train_csv}")
+    train_dataset = ChessTilesCSV(
+        csv_path=str(train_csv),
+        root=str(path_root_path),
+        transform=None,
+        use_embeddings=False
+    )
+
+    print(f"Training dataset size: {len(train_dataset)}")
+
+    # Create dataloader
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True
+    )
     trained_model = train(train_loader)
 
     # Save only the model parameters (weights/biases)
