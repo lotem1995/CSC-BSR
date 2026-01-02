@@ -212,7 +212,7 @@ __marimo__/
 .cursor/rules/codacy.mdc
 
 # Preprocessed datasets (can be regenerated from raw data)
-preprocessed_data/
+data/preprocessed_data/
 data/splits/
 data/dataset_manifest.json
 embeddings/
