@@ -37,6 +37,29 @@ class ChessTilesCSV(Dataset):
             image_tensor = self.transform(img)
         return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
 
+def paint_camel():
+    # We use 'r' before the string to denote a raw string
+    # This prevents python from interpreting backslashes as special characters
+    art = r"""
+           \ | /
+         '-.;;;.-'
+        -==;;;;;==-   (The Blazing Sun)
+         .-';;;'-.
+           / | \
+
+              //
+            _oo\
+           (__/ \  _  _
+              \  \/ \/ \
+              (         )    (The Ship of the Desert)
+               \_______/
+               //     \\
+              //       \\
+    ~^~^~^~^~^~^~^~^~^~^~^~^~
+         (The Hot Sand)
+    """
+    print(art)
+
 def get_train_dataloader(batch_size,num_workers):
     # --- CONFIGURATION ---
     rotation_jitter = 5  # Change this number to increase/decrease the "wiggle"
@@ -90,12 +113,14 @@ def get_train_dataloader(batch_size,num_workers):
         shuffle=False,  # CRITICAL: Shuffle must be False when using a any sampler - in our case the sampler already shuffle
         num_workers=num_workers  # Adjust based on your CPU
     )
+
+    paint_camel()
     return train_loader
 
 
 if __name__ == "__main__":
     # example of some pictures sampled from the new distribution after some transforms
-    train_loader = get_train_dataloader()
+    train_loader = get_train_dataloader(64,1)
     import matplotlib.pyplot as plt
     import numpy as np
     import torchvision
