@@ -12,7 +12,7 @@ from tqdm import tqdm
 from VAE.VAE_nn import VAE
 # Your existing import
 from VAE.train_VAE import BATCH_SIZE
-from preprocessing.load_dataset import ChessTilesCSV
+from preprocessing.load_dataset import ChessTilesCSV, get_train_dataloader
 from pathlib import Path
 
 
@@ -162,37 +162,7 @@ if __name__ == "__main__":
     model = VAE()
     model.load_state_dict(torch.load('VAE\\model_weights.pth'))
 
-    splits_dir = Path("data/splits")
-    path_root = Path("data")
-    # Load datasets using ChessTilesCSV
-    splits_dir_path = Path(splits_dir)
-    path_root_path = Path(path_root)
-
-    train_csv = splits_dir_path / "train.csv"
-    val_csv = splits_dir_path / "val.csv"
-
-    if not train_csv.exists():
-        raise FileNotFoundError(
-            f"Training CSV not found at {train_csv}. "
-            "Please run build_dataset.py first to create the dataset."
-        )
-
-    print(f"Loading training data from {train_csv}")
-    train_dataset = ChessTilesCSV(
-        csv_path=str(train_csv),
-        root=str(path_root_path),
-        transform=None,
-        use_embeddings=False
-    )
-
-    print(f"Training dataset size: {len(train_dataset)}")
-
-    # Create dataloader
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True
-    )
+    train_loader = get_train_dataloader(batch_size=BATCH_SIZE,num_workers=4)
 
     # 2. Calibrate (Calculate threshold ONCE)
     threshold = calibrate_threshold(model, train_loader, DEVICE)

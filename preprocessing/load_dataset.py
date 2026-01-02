@@ -37,7 +37,7 @@ class ChessTilesCSV(Dataset):
             image_tensor = self.transform(img)
         return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
 
-def get_train_dataloader():
+def get_train_dataloader(batch_size,num_workers):
     # --- CONFIGURATION ---
     rotation_jitter = 5  # Change this number to increase/decrease the "wiggle"
 
@@ -85,10 +85,10 @@ def get_train_dataloader():
     # Create the DataLoader
     train_loader = DataLoader(
         dataset,
-        batch_size=64,  # Adjust as needed
+        batch_size=batch_size,  # Adjust as needed
         sampler=sampler,  # Pass the sampler here
         shuffle=False,  # CRITICAL: Shuffle must be False when using a any sampler - in our case the sampler already shuffle
-        num_workers=4  # Adjust based on your CPU
+        num_workers=num_workers  # Adjust based on your CPU
     )
     return train_loader
 
