@@ -197,7 +197,7 @@ if __name__ == "__main__":
     # 2. Calibrate (Calculate threshold ONCE)
     threshold = calibrate_threshold(model, train_loader, DEVICE)
 
-    anomaly_path = "C:\\Users\\gilad\\PycharmProjects\\CSC-BSR\\preprocessed_data\\game2_frame_000856_tile_row7_column3_class5.png"
+    anomaly_path = "data\\preprocessed_data\\game2_frame_000856_tile_row7_column3_class5.png"
     # 3. Test on a real file
     analyze_image_from_path(model,anomaly_path, threshold, DEVICE)
 
