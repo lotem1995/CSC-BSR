@@ -17,7 +17,7 @@ from preprocessing.load_dataset import ChessTilesCSV, get_train_dataloader
 # --- Configuration ---
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
-EPOCHS = 1
+EPOCHS = 10
 LATENT_DIM = 20  # Size of the compressed "bottleneck"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -32,7 +32,8 @@ def train(train_loader):
     for epoch in range(EPOCHS):
         total_loss = 0
 
-        for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{EPOCHS}")
+        for batch_idx, batch in enumerate(pbar):
             data = batch["image"].to(DEVICE)
             optimizer.zero_grad()
 
@@ -46,6 +47,8 @@ def train(train_loader):
             loss.backward()
             total_loss += loss.item()
             optimizer.step()
+
+            pbar.set_postfix(loss=total_loss / (batch_idx + 1))
 
     print("Training Complete!")
     return model

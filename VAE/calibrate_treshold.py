@@ -160,7 +160,7 @@ if __name__ == "__main__":
 
     # ... Assume 'model' and 'train_loader' are loaded here ...
     model = VAE()
-    model.load_state_dict(torch.load('VAE\\model_weights.pth'))
+    model.load_state_dict(torch.load('VAE\\models_weights\\model_bs64_lr0.001_ep10_lat20.pth'))
 
     train_loader = get_train_dataloader(batch_size=BATCH_SIZE,num_workers=4)
 
