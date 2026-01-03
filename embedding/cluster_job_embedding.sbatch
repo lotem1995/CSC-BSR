@@ -4,17 +4,18 @@
 ## Adjust partition/constraint to match your cluster naming.
 
 #SBATCH --job-name=chess_embed
-#SBATCH --qos=course
-#SBATCH --partition=rtx2080ti
+#SBATCH --account=brafman
+#SBATCH --qos=normal
+#SBATCH --partition=rtx4090
 #SBATCH --output=logs/chess_embed-%j.out
 #SBATCH --error=logs/chess_embed-%j.err
 #SBATCH --mail-user=lotemsak@post.bgu.ac.il
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --time=0-02:00:00
+#SBATCH --time=0-04:00:00
 #SBATCH --gpus=1
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=10
-#SBATCH --gpus=rtx_2080ti
+#SBATCH --gpus=rtx_4090:1
 ## Example partition/constraint (commented—adapt to your cluster)
 ## #SBATCH --partition=rtx2080
 ## #SBATCH --constraint=rtx2080ti
@@ -25,6 +26,7 @@ cd "$SLURM_SUBMIT_DIR"
 mkdir -p logs checkpoints results
 
 # Conda/venv activation (edit as needed)
+module load anaconda
 module load cuda/13
 # source ~/miniconda3/bin/activate chess_env
 echo "Working directory: $(pwd)"
@@ -41,8 +43,12 @@ BATCH_SIZE=${BATCH_SIZE:-2}
 NUM_WORKERS=${NUM_WORKERS:-2}
 EPOCHS=${EPOCHS:-1}
 SPLITS_DIR=${SPLITS_DIR:-data/splits}
-DATA_ROOT=${DATA_ROOT:.}
+DATA_ROOT=${DATA_ROOT:-.}
 EMBEDDING_BACKBONE=${EMBEDDING_BACKBONE:-qwen}  # qwen|dino-small|dino-base
+
+# Build dataset
+python preprocessing/build_dataset.py --config preprocessing/dataset_config.example.yaml --output data/dataset_manifest.json
+
 
 # Run all scenarios sequentially (Qwen/DINO head-only, Qwen LoRA, DINO backbone)
 PYTHONPATH=. python embedding/experiment_runner.py \

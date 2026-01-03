@@ -220,3 +220,8 @@ embeddings/
 # Keep raw data but ignore large processed outputs
 checkpoints/
 *.err
+embedding/*.pt
+preprocessed_data/
+models/
+logs/
+results/ 

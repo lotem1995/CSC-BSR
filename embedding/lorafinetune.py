@@ -11,7 +11,9 @@ import os
 from peft import get_peft_model, LoraConfig, TaskType
 import torch
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
+from loguru import logger
 
+logger.add("LoRA_finetune_{time}.log", rotation="10 MB")
 
 class QwenLoRAFineTuner:
     """
@@ -58,9 +60,9 @@ class QwenLoRAFineTuner:
         # Apply LoRA to model
         self.model = get_peft_model(self.model, lora_config)
         
-        print(f"Model parameters: {self.model.num_parameters()}")
-        print(f"Trainable parameters: {self.model.num_parameters(only_trainable=True)}")
-        print(f"LoRA efficiency: {100 * self.model.get_nb_trainable_parameters()[0] / self.model.get_nb_trainable_parameters()[1]:.2f}%")
+        logger.info(f"Model parameters: {self.model.num_parameters()}")
+        logger.info(f"Trainable parameters: {self.model.num_parameters(only_trainable=True)}")
+        logger.info(f"LoRA efficiency: {100 * self.model.get_nb_trainable_parameters()[0] / self.model.get_nb_trainable_parameters()[1]:.2f}%")
     
     def extract_embedding(self, image):
         """Extract embedding from Qwen visual tower (same interface as QwenFineTuner)"""
