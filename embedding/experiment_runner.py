@@ -19,22 +19,26 @@ import os
 import sys
 import subprocess
 import argparse
-
+from loguru import logger
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 FINE_TUNE = os.path.join(THIS_DIR, "fine_tune.py")
 
+#define logging to file
+logger.add("experiment_runner_{time}.log", rotation="1 MB")
 
 def run(label, args_list):
-    print("\n" + "="*80)
-    print(f"RUN: {label}")
-    print("="*80)
-    print("Command:", "python", FINE_TUNE, *args_list)
+    logger.info("\n" + "="*80)
+    logger.info(f"RUN: {label}")
+    logger.info("="*80)
+    logger.info("Command: python {} {}".format(FINE_TUNE, " ".join(args_list)))
     sys.stdout.flush()
-    proc = subprocess.run([sys.executable, FINE_TUNE, *args_list], text=True)
+    # Change to parent directory so imports work correctly
+    parent_dir = os.path.dirname(THIS_DIR)
+    proc = subprocess.run([sys.executable, FINE_TUNE, *args_list], text=True, cwd=parent_dir)
     if proc.returncode != 0:
-        print(f"❌ {label} failed with code {proc.returncode}")
+        logger.error(f"❌ {label} failed with code {proc.returncode}")
     else:
-        print(f"✅ {label} completed")
+        logger.info(f"✅ {label} completed")
     return proc.returncode
 
 
@@ -92,13 +96,13 @@ def main():
         rc = run(label, cmd_args)
         failures += int(rc != 0)
 
-    print("\n" + "="*80)
-    print("SUMMARY")
-    print("="*80)
+    logger.info("\n" + "="*80)
+    logger.info("SUMMARY")
+    logger.info("="*80)
     if failures == 0:
-        print("All scenarios completed successfully")
+        logger.info("All scenarios completed successfully")
     else:
-        print(f"{failures} scenario(s) failed")
+        logger.error(f"{failures} scenario(s) failed")
 
     return failures
 

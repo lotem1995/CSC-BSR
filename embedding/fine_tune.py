@@ -13,6 +13,7 @@ Updated to work with pre-built dataset from build_dataset.py
 """
 
 import sys
+from pathlib import Path
 import argparse
 import torch
 import torch.nn as nn
@@ -21,14 +22,19 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 from typing import Tuple, Dict, Optional
-from pathlib import Path
+
+# Ensure project root is on sys.path so intra-repo imports work
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from preprocessing.load_dataset import ChessTilesCSV
-from sklearn.metrics import balanced_accuracy_score, f1_score
+from sklearn.metrics import balanced_accuracy_score, f1_score, confusion_matrix
 
 from embedding_base import EmbeddingModel
 from dinov2 import DINOv2Embedding
 
+from loguru import logger
 
 def _is_qwen_embedding_model(model: Optional[EmbeddingModel]) -> bool:
     return model is not None and model.__class__.__name__ == "QwenVisionEmbedding"
@@ -223,8 +229,16 @@ class FineTuner:
             preds_np = preds.cpu().numpy()
             
             # Balanced accuracy and F1 (better for imbalanced data)
+            # Debug: Check label distribution
+            unique_true = np.unique(labels_np)
+            unique_pred = np.unique(preds_np)
+            all_classes = np.arange(13)  # 13 classes total (0-12)
+            if len(unique_true) < 13 or len(unique_pred) < 13:
+                logger.debug(f"  [DEBUG] Batch imbalance: unique_true={sorted(unique_true.tolist())}, unique_pred={sorted(unique_pred.tolist())}, all_classes=0-12")
+            
+            # Use labels parameter to avoid sklearn warnings
             balanced_acc = balanced_accuracy_score(labels_np, preds_np)
-            f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0)
+            f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0, labels=all_classes)
         
         return loss.item(), balanced_acc, f1
     
@@ -320,9 +334,29 @@ class QwenLoRAClassifierTrainer:
         preds = logits.argmax(dim=1)
         labels_np = labels.cpu().numpy()
         preds_np = preds.cpu().numpy()
+        # Debug: Check label distribution
+        unique_true = np.unique(labels_np)
+        unique_pred = np.unique(preds_np)
+        all_classes = np.arange(13)  # 13 classes total (0-12)
+        if len(unique_true) < 13 or len(unique_pred) < 13:
+            logger.warning(f"  [DEBUG LoRA] Batch imbalance: unique_true={sorted(unique_true.tolist())}, unique_pred={sorted(unique_pred.tolist())}, all_classes=0-12")
         balanced_acc = balanced_accuracy_score(labels_np, preds_np)
-        f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0)
+        f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0, labels=all_classes)
         return loss.item(), balanced_acc, f1
+    
+    def save(self, path: str):
+        """Save fine-tuned LoRA adapters and classifier head"""
+        torch.save({
+            'classifier': self.classifier.state_dict(),
+            'qwen_lora_state': self.qwen.model.state_dict(),
+            'piece_labels': PIECE_LABELS,
+        }, path)
+    
+    def load(self, path: str):
+        """Load fine-tuned LoRA adapters and classifier head"""
+        checkpoint = torch.load(path, map_location=self.device)
+        self.classifier.load_state_dict(checkpoint['classifier'])
+        self.qwen.model.load_state_dict(checkpoint['qwen_lora_state'])
 
 
 class DINOBackboneFineTuner:
@@ -387,9 +421,29 @@ class DINOBackboneFineTuner:
         preds = logits.argmax(dim=1)
         labels_np = labels.cpu().numpy()
         preds_np = preds.cpu().numpy()
+        # Debug: Check label distribution
+        unique_true = np.unique(labels_np)
+        unique_pred = np.unique(preds_np)
+        all_classes = np.arange(13)  # 13 classes total (0-12)
+        if len(unique_true) < 13 or len(unique_pred) < 13:
+            logger.warning(f"  [DEBUG DINO] Batch imbalance: unique_true={sorted(unique_true.tolist())}, unique_pred={sorted(unique_pred.tolist())}, all_classes=0-12")
         balanced_acc = balanced_accuracy_score(labels_np, preds_np)
-        f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0)
+        f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0, labels=all_classes)
         return loss.item(), balanced_acc, f1
+    
+    def save(self, path: str):
+        """Save fine-tuned backbone and classifier head"""
+        torch.save({
+            'model': self.model.state_dict(),
+            'classifier': self.classifier.state_dict(),
+            'piece_labels': PIECE_LABELS,
+        }, path)
+    
+    def load(self, path: str):
+        """Load fine-tuned backbone and classifier head"""
+        checkpoint = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(checkpoint['model'])
+        self.classifier.load_state_dict(checkpoint['classifier'])
 
 
 # Backward compatibility alias
@@ -404,7 +458,8 @@ def train_fine_tuning(
     batch_size: int = 4,
     use_val: bool = True,
     num_workers: int = 0,
-    strategy: str = "head-only"
+    strategy: str = "head-only",
+    embedding_model_name: str = "qwen",
 ):
     """
     Main training loop for fine-tuning using pre-built dataset.
@@ -418,13 +473,13 @@ def train_fine_tuning(
         use_val: Whether to evaluate on validation set after each epoch
         num_workers: DataLoader worker count (tune for cluster CPUs)
     """
-    print("=" * 80)
+    logger.info("=" * 80)
     if embedding_model is None:
-        print("FINE-TUNING QWEN ON CHESS DATA")
+        logger.info("FINE-TUNING QWEN ON CHESS DATA")
         embedding_model = _load_qwen_embedding_class()()
     else:
-        print(f"FINE-TUNING {embedding_model} ON CHESS DATA")
-    print("=" * 80)
+        logger.info(f"FINE-TUNING {embedding_model} ON CHESS DATA")
+    logger.info("=" * 80)
     
     # Load datasets using ChessTilesCSV
     splits_dir_path = Path(splits_dir)
@@ -439,7 +494,7 @@ def train_fine_tuning(
             "Please run build_dataset.py first to create the dataset."
         )
     
-    print(f"Loading training data from {train_csv}")
+    logger.info(f"Loading training data from {train_csv}")
     train_dataset = ChessTilesCSV(
         csv_path=str(train_csv),
         root=str(path_root_path),
@@ -447,7 +502,7 @@ def train_fine_tuning(
         use_embeddings=False
     )
     
-    print(f"Training dataset size: {len(train_dataset)}")
+    logger.info(f"Training dataset size: {len(train_dataset)}")
     
     # Create dataloader
     train_loader = DataLoader(
@@ -460,14 +515,14 @@ def train_fine_tuning(
     # Optional validation dataset
     val_loader = None
     if use_val and val_csv.exists():
-        print(f"Loading validation data from {val_csv}")
+        logger.info(f"Loading validation data from {val_csv}")
         val_dataset = ChessTilesCSV(
             csv_path=str(val_csv),
             root=str(path_root_path),
             transform=None,
             use_embeddings=False
         )
-        print(f"Validation dataset size: {len(val_dataset)}")
+        logger.info(f"Validation dataset size: {len(val_dataset)}")
         val_loader = DataLoader(
             val_dataset,
             batch_size=batch_size,
@@ -478,38 +533,38 @@ def train_fine_tuning(
     # Initialize fine-tuner per strategy
     if strategy == "lora":
         if embedding_model is not None and not _is_qwen_embedding_model(embedding_model):
-            print("Warning: --strategy lora is only supported with Qwen; overriding to Qwen.")
+            logger.warning("Warning: --strategy lora is only supported with Qwen; overriding to Qwen.")
         fine_tuner = QwenLoRAClassifierTrainer()
     elif strategy == "backbone":
         if _is_dino_embedding_model(embedding_model):
             fine_tuner = DINOBackboneFineTuner(embedding_model)
         else:
-            print("Warning: --strategy backbone is only supported with DINO; falling back to head-only.")
+            logger.warning("Warning: --strategy backbone is only supported with DINO; falling back to head-only.")
             fine_tuner = FineTuner(embedding_model=embedding_model)
     else:
         fine_tuner = FineTuner(embedding_model=embedding_model)
     
     # Training loop
     for epoch in range(epochs):
-        print(f"\nEpoch {epoch+1}/{epochs}")
-        print("-" * 80)
+        logger.info(f"Epoch {epoch+1}/{epochs}")
+        logger.info("-" * 80)
         
         # Training phase
         fine_tuner.classifier.train()
         
         total_loss = 0
         num_batches = 0
-        
-        for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training")):
+        model_name = embedding_model_name + " " + strategy
+        for batch_idx, batch in enumerate(tqdm(train_loader, desc="Training "+ model_name)):
             loss = fine_tuner.train_batch(batch)
             total_loss += loss
             num_batches += 1
             
             if (batch_idx + 1) % 5 == 0:
-                print(f"  Batch {batch_idx+1}: Loss = {loss:.4f}")
+                logger.info(f"  Batch {batch_idx+1}: Loss = {loss:.4f}")
         
         avg_loss = total_loss / max(num_batches, 1)
-        print(f"\nEpoch {epoch+1} Training - Avg Loss: {avg_loss:.4f}")
+        logger.info(f"Epoch {epoch+1} Training - Avg Loss: {avg_loss:.4f}")
         
         # Validation phase
         if val_loader is not None:
@@ -530,17 +585,17 @@ def train_fine_tuning(
             avg_val_loss = val_loss / max(val_batches, 1)
             avg_val_balanced_acc = val_balanced_acc / max(val_batches, 1)
             avg_val_f1 = val_f1 / max(val_batches, 1)
-            print(f"Epoch {epoch+1} Validation:")
-            print(f"  Loss: {avg_val_loss:.4f}")
-            print(f"  Balanced Accuracy: {avg_val_balanced_acc:.4f}")
-            print(f"  F1 Score (weighted): {avg_val_f1:.4f}")
+            logger.info(f"Epoch {epoch+1} Validation:"
+                        f"  Loss: {avg_val_loss:.4f}"
+                        f"  Balanced Accuracy: {avg_val_balanced_acc:.4f}"
+                        f"  F1 Score (weighted): {avg_val_f1:.4f}")
         else:
             fine_tuner.classifier.eval()
     
     # Save fine-tuned model
     output_path = str(Path(__file__).resolve().parent / "chess_finetuned.pt")
     fine_tuner.save(output_path)
-    print(f"\n✓ Fine-tuned model saved to: {output_path}")
+    logger.info(f"\n✓ Fine-tuned model saved to: {output_path}")
     
     return fine_tuner
 
@@ -570,7 +625,9 @@ if __name__ == "__main__":
             embedding_model = DINOv2Embedding(model_size="small")
         elif args.embedding_model == "dino-base":
             embedding_model = DINOv2Embedding(model_size="base")
-
+    #log to file with debug info
+    logfile = f"fine_tune_{args.strategy}_{args.embedding_model}.log"
+    logger.add(logfile+"{time}", rotation="1 MB", level="DEBUG")
     train_fine_tuning(
         splits_dir=args.splits_dir,
         embedding_model=embedding_model,
@@ -579,6 +636,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         use_val=not args.no_val,
         num_workers=args.num_workers,
-        strategy=args.strategy
+        strategy=args.strategy,
+        embedding_model_name=args.embedding_model
     )
 
