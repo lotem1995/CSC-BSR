@@ -2,13 +2,9 @@ import pandas as pd
 from pathlib import Path
 from PIL import Image
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset,DataLoader, TensorDataset, WeightedRandomSampler
 import numpy as np
-<<<<<<< HEAD
-from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from torchvision import transforms
-=======
->>>>>>> b5e13acf (pre processed data can be a ready-to-go dataset using the provided script)
 import matplotlib.pyplot as plt 
 from collections import Counter
 splits_dir = Path("data/splits")
@@ -36,9 +32,6 @@ class ChessTilesCSV(Dataset):
             with Image.open(img_path) as img:
                 img = img.convert("RGB")
                 image_tensor = torch.from_numpy(np.array(img)).permute(2,0,1).float()/255.0
-<<<<<<< HEAD
-        if self.transform:
-            image_tensor = self.transform(img)
         return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
 
 def paint_camel():
@@ -165,11 +158,4 @@ if __name__ == "__main__":
 
     # 4. Print Distribution Check (Text)
     print(f"\nBatch Label Counts: {torch.bincount(labels)}")
-=======
-        return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
-
-train_ds = ChessTilesCSV(splits_dir/"train.csv", root=path_root)
-
-# show train_ds as pandas dataframe
-print(train_ds.df.head())
 >>>>>>> b5e13acf (pre processed data can be a ready-to-go dataset using the provided script)
