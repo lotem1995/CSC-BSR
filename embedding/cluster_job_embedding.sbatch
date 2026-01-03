@@ -51,7 +51,7 @@ python preprocessing/build_dataset.py --config preprocessing/dataset_config.exam
 
 
 # Run all scenarios sequentially (Qwen/DINO head-only, Qwen LoRA, DINO backbone)
-PYTHONPATH=. python embedding/experiment_runner.py \
+PYTHONPATH=. PYTHONPATH=. python embedding/experiment_runner.py \
   --splits-dir "$SPLITS_DIR" \
   --path-root "$DATA_ROOT" \
   --epochs "$EPOCHS" \

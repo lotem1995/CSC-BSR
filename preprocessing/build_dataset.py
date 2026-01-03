@@ -369,18 +369,12 @@ def _generate_tiles_from_games(
     games = _discover_games(data_root)
     for csv_path, images_dir in games:
         pairs = pair_images_with_fens(str(csv_path), str(images_dir))
-<<<<<<< HEAD
         game_name = Path(csv_path).stem
         print("Generating tiles for game", game_name)
         for image_path, fen in pairs:
             board = fen_to_board_int(fen)
             slice_image_with_coordinates(
                 game_name,
-=======
-        for image_path, fen in pairs:
-            board = fen_to_board_int(fen)
-            slice_image_with_coordinates(
->>>>>>> b5e13acf (pre processed data can be a ready-to-go dataset using the provided script)
                 image_path,
                 str(raw_tiles_dir),
                 board,

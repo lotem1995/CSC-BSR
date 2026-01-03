@@ -211,7 +211,11 @@ __marimo__/
 .github/instructions/codacy.instructions.md
 .cursor/rules/codacy.mdc
 
+# Keep raw data but ignore large processed outputs
+checkpoints/
+*.err
 # Preprocessed datasets (can be regenerated from raw data)
+data/preprocessed_data/
 data/preprocessed_data/
 data/splits/
 data/dataset_manifest.json
