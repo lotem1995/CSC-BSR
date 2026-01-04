@@ -23,6 +23,7 @@ class ChessTilesCSV(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         img_path = self.root / row.image
+        # img_path = str(img_path).replace('\\', '/')
         label = int(row.label)
         emb = row.embedding if isinstance(row.embedding, str) and row.embedding else None
 

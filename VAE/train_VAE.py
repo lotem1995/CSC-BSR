@@ -17,12 +17,15 @@ from preprocessing.load_dataset import ChessTilesCSV, get_train_dataloader
 # --- Configuration ---
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
-EPOCHS = 10
+EPOCHS = 200
 LATENT_DIM = 20  # Size of the compressed "bottleneck"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def train(train_loader):
-    model = VAE().to(DEVICE)
+    model = VAE()
+    weights_path = 'model_bs64_lr0.001_ep69_lat20_total_lossf14326815.04.pth'  # Update if needed
+    model.load_state_dict(torch.load(weights_path))
+    model.to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
     print(f"Training VAE on {DEVICE}...")
@@ -49,6 +52,13 @@ def train(train_loader):
             optimizer.step()
 
             pbar.set_postfix(loss=total_loss / (batch_idx + 1))
+
+        if epoch%3==0:
+            print("saving model...")
+            model_filename = f"model_bs{BATCH_SIZE}_lr{LEARNING_RATE}_ep{epoch}_lat{LATENT_DIM}_total_lossf{total_loss:.2f}.pth"
+            torch.save(model.state_dict(), model_filename)
+
+
 
     print("Training Complete!")
     return model
