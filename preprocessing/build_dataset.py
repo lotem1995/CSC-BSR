@@ -64,7 +64,7 @@ def _validate_split(split: Dict[str, float]) -> Dict[str, float]:
     for key in ("train", "val", "test"):
         if key not in split:
             raise ValueError("Split dict must contain train, val, and test keys")
-        if split[key] <= 0:
+        if split[key] < 0:
             raise ValueError("Split ratios must be positive")
     return split
 
@@ -210,44 +210,22 @@ def _assign_groups(
         num_groups: int,
         seed: int,
 ) -> Dict[str, str]:
-    """
-    Assigns groups (Games) to splits, ensuring every split gets at least one game.
-    """
-    if num_groups < len(split):
-        raise ValueError(
-            f"You have {num_groups} games but defined {len(split)} splits. "
-            "You must have at least as many games as splits to ensure none are empty."
-        )
-
-    # 1. Sort games by rarity (same as before)
     total_counts = sum(group_counts.values())
     ordered_ids = _order_groups_by_rarity(group_counts, total_counts)
 
     rng = random.Random(seed)
     rng.shuffle(ordered_ids)
 
-    # 2. Calculate Split Sizes (Enforcing Minimum 1)
-    split_names = sorted(split.keys(), key=lambda k: split[k], reverse=True)
-
-    # Start everyone with 1 to ensure no empty splits
-    counts = {name: 1 for name in split_names}
-
-    # Distribute the remaining games based on who is most "under-filled"
-    remainder = num_groups - len(split)
-    target_sizes = {k: num_groups * v for k, v in split.items()}
-
-    for _ in range(remainder):
-        # Pick the split that is currently furthest below its target size
-        # (current_count - target) -> lowest number means most under-filled
-        best_split = min(split_names, key=lambda s: counts[s] - target_sizes[s])
-        counts[best_split] += 1
-
-    # 3. Perform the Assignment
     assignments: Dict[str, str] = {}
-    current_idx = 0
+    split_names = sorted(split.keys(), key=lambda k: split[k], reverse=True)
+    split_sizes = {name: int(num_groups * ratio) for name, ratio in split.items()}
 
+    remainder = num_groups - sum(split_sizes.values())
+    split_sizes[split_names[0]] += remainder
+
+    current_idx = 0
     for split_name in split_names:
-        size = counts[split_name]
+        size = split_sizes[split_name]
         for _ in range(size):
             if current_idx < len(ordered_ids):
                 assignments[ordered_ids[current_idx]] = split_name
