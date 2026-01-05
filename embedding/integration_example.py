@@ -18,7 +18,7 @@ import os
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from embedding_base import EmbeddingModel
-from main import QwenVisionEmbedding
+from embedding.qwen3 import QwenVisionEmbedding
 from dinov2 import DINOv2Embedding
 from classifier import FENClassifier
 from fine_tune import FineTuner
@@ -214,7 +214,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-    from main import QwenVisionEmbedding
+    from embedding.qwen3 import QwenVisionEmbedding
     from classifier import FENClassifier
     
     extractor = QwenVisionEmbedding()

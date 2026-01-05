@@ -28,7 +28,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from preprocessing.load_dataset import ChessTilesCSV
+from preprocessing.load_dataset import ChessTilesCSV, get_train_dataloader
 from sklearn.metrics import balanced_accuracy_score, f1_score, confusion_matrix
 
 from embedding_base import EmbeddingModel
@@ -46,7 +46,7 @@ def _is_dino_embedding_model(model: Optional[EmbeddingModel]) -> bool:
 
 def _load_qwen_embedding_class():
     # Lazy import: avoids importing transformers unless Qwen is requested.
-    from main import QwenVisionEmbedding
+    from embedding.qwen3 import QwenVisionEmbedding
     return QwenVisionEmbedding
 
 # Piece label mapping
@@ -233,14 +233,13 @@ class FineTuner:
             unique_true = np.unique(labels_np)
             unique_pred = np.unique(preds_np)
             all_classes = np.arange(13)  # 13 classes total (0-12)
-            if len(unique_true) < 13 or len(unique_pred) < 13:
+            if len(unique_pred) < len(unique_true) * 0.5:
                 logger.debug(f"  [DEBUG] Batch imbalance: unique_true={sorted(unique_true.tolist())}, unique_pred={sorted(unique_pred.tolist())}, all_classes=0-12")
             
             # Use labels parameter to avoid sklearn warnings
             balanced_acc = balanced_accuracy_score(labels_np, preds_np)
             f1 = f1_score(labels_np, preds_np, average='weighted', zero_division=0, labels=all_classes)
-        
-        return loss.item(), balanced_acc, f1
+        return loss.item(), balanced_acc, float(f1)
     
     def save(self, path: str):
         """Save fine-tuned classifier head"""
@@ -495,23 +494,23 @@ def train_fine_tuning(
         )
     
     logger.info(f"Loading training data from {train_csv}")
-    train_dataset = ChessTilesCSV(
-        csv_path=str(train_csv),
-        root=str(path_root_path),
-        transform=None,
-        use_embeddings=False
-    )
+    # train_dataset = ChessTilesCSV(
+    #     csv_path=str(train_csv),
+    #     root=str(path_root_path),
+    #     transform=None,
+    #     use_embeddings=False
+    # )
     
-    logger.info(f"Training dataset size: {len(train_dataset)}")
+    # logger.info(f"Training dataset size: {len(train_dataset)}")
     
-    # Create dataloader
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers
-    )
-    
+    # # Create dataloader
+    # train_loader = DataLoader(
+    #     train_dataset,
+    #     batch_size=batch_size,
+    #     shuffle=True,
+    #     num_workers=num_workers
+    # )
+    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers)
     # Optional validation dataset
     val_loader = None
     if use_val and val_csv.exists():
@@ -593,9 +592,9 @@ def train_fine_tuning(
             fine_tuner.classifier.eval()
     
     # Save fine-tuned model
-    output_path = str(Path(__file__).resolve().parent / "chess_finetuned.pt")
+    output_path = str(Path(__file__).resolve().parent / f"chess_encoder_finetuned_{embedding_model_name}_{strategy}.pt")
     fine_tuner.save(output_path)
-    logger.info(f"\n✓ Fine-tuned model saved to: {output_path}")
+    logger.info(f"✓ Fine-tuned model saved to: {output_path}")
     
     return fine_tuner
 
@@ -612,6 +611,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-val", action="store_true", help="Skip validation loop")
     parser.add_argument("--strategy", choices=["head-only", "lora", "backbone"], default="head-only",
                         help="Training strategy: classifier only, Qwen LoRA, or finetune backbone (DINO only)")
+    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
     embedding_model = None
@@ -626,8 +626,8 @@ if __name__ == "__main__":
         elif args.embedding_model == "dino-base":
             embedding_model = DINOv2Embedding(model_size="base")
     #log to file with debug info
-    logfile = f"fine_tune_{args.strategy}_{args.embedding_model}.log"
-    logger.add(logfile+"{time}", rotation="1 MB", level="DEBUG")
+    logfile = f"fine_tune_{args.strategy}_{args.embedding_model}_"
+    logger.add(logfile+"{time}.log", rotation="1 MB", level="DEBUG" if args.debug else "INFO")
     train_fine_tuning(
         splits_dir=args.splits_dir,
         embedding_model=embedding_model,
