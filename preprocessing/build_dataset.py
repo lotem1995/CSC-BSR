@@ -115,14 +115,15 @@ def _desired_class_counts(global_counts: np.ndarray, split: Dict[str, float]) ->
 
 
 def _score_split(
-    prospective: np.ndarray,
-    desired: np.ndarray,
-    board_load: int,
-    target_boards: float,
+        prospective: np.ndarray,
+        desired: np.ndarray,
+        board_load: int,
+        target_boards: float,
 ) -> float:
     class_penalty = np.linalg.norm(prospective - desired)
     load_penalty = max(0.0, (board_load - target_boards))
     return class_penalty + load_penalty
+
 
 def _identify_game(board_id: str, known_games: List[str]) -> str:
     """
