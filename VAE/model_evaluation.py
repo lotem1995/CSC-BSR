@@ -344,13 +344,13 @@ if __name__ == "__main__":
     # RUN EVAL 2: STANDARD RECONSTRUCTION ERROR
     # ----------------------------------------
     print("\n--- RUNNING MSE RECONSTRUCTION ERROR ---")
-    show_top_anomalies(model, test_loader, top_k=10, device=device)
+    show_top_anomalies(model, test_loader, top_k=30, device=device)
 
     # ----------------------------------------
     # RUN EVAL 3: ELLIPTIC ENVELOPE (LATENT DENSITY)
     # ----------------------------------------
     print("\n--- RUNNING ELLIPTIC ENVELOPE OUTLIER DETECTION ---")
-    visualize_latent_outliers_2(model, test_dataset, contamination=0.1, top_k=10, device=device)
+    visualize_latent_outliers_2(model, test_dataset, contamination=0.1, top_k=30, device=device)
 
     # ----------------------------------------
     # RUN EVAL 4: LATENT CYCLE CONSISTENCY (1 CYCLE)
@@ -365,18 +365,30 @@ if __name__ == "__main__":
     plt.xlabel("Error")
     plt.show()
 
-    plot_worst_consistency(test_dataset, scores_cycle, "1-Cycle Consistency Anomalies", top_k=10)
+    plot_worst_consistency(test_dataset, scores_cycle, "1-Cycle Consistency Anomalies", top_k=30)
 
     # ----------------------------------------
     # RUN EVAL 5: MULTI-CYCLE DRIFT
     # ----------------------------------------
     print("\n--- RUNNING MULTI-CYCLE DRIFT (2 Cycles) ---")
     scores_drift = get_multicycle_scores(model, test_dataset, cycles=2, device=device)
-    plot_worst_consistency(test_dataset, scores_drift, "2-Cycle Drift Anomalies", top_k=10)
+    plot_worst_consistency(test_dataset, scores_drift, "2-Cycle Drift Anomalies", top_k=30)
 
     print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
     scores_drift = get_multicycle_scores(model, test_dataset, cycles=3, device=device)
-    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=10)
+    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
+
+    print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
+    scores_drift = get_multicycle_scores(model, test_dataset, cycles=4, device=device)
+    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
+
+    print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
+    scores_drift = get_multicycle_scores(model, test_dataset, cycles=5, device=device)
+    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
+
+    print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
+    scores_drift = get_multicycle_scores(model, test_dataset, cycles=6, device=device)
+    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
 
     # ----------------------------------------
     # RUN EVAL 6: LIKELIHOOD REGRET (Most expensive)
@@ -392,6 +404,6 @@ if __name__ == "__main__":
     plt.xlabel("Improvement Score")
     plt.show()
 
-    plot_regret_anomalies(test_dataset, scores_regret, top_k=10)
+    plot_regret_anomalies(test_dataset, scores_regret, top_k=30)
 
     print("\n--- ALL EVALUATIONS COMPLETE ---")
