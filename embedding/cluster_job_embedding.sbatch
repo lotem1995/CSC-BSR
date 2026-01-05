@@ -38,26 +38,15 @@ export QWEN_MODEL_NAME="Qwen/Qwen3-VL-2B-Instruct"
 export QWEN_DEVICE_MAP="cuda:0"
 
 source activate chess_embedding
-# Tunables for quick, low-VRAM runs
-BATCH_SIZE=${BATCH_SIZE:-2}
-NUM_WORKERS=${NUM_WORKERS:-2}
-EPOCHS=${EPOCHS:-1}
-SPLITS_DIR=${SPLITS_DIR:-data/splits}
-DATA_ROOT=${DATA_ROOT:-.}
-EMBEDDING_BACKBONE=${EMBEDDING_BACKBONE:-qwen}  # qwen|dino-small|dino-base
 
-# Build dataset
-python preprocessing/build_dataset.py --config preprocessing/dataset_config.example.yaml --output data/dataset_manifest.json
+#build dataset (if not already built)
+python preprocessing/build_dataset.py --config preprocessing/dataset_config.example.yaml --output data/dataset_manifest.json --split-indices-dir data/splits
 
+# fine-tune embedding model
+python embedding/fine_tune.py --splits-dir data/splits --path-root . --epochs 1 --batch-size 2 --num-workers 2 --embedding-model dino-small --strategy backbone
 
-# Run all scenarios sequentially (Qwen/DINO head-only, Qwen LoRA, DINO backbone)
-PYTHONPATH=. PYTHONPATH=. python embedding/experiment_runner.py \
-  --splits-dir "$SPLITS_DIR" \
-  --path-root "$DATA_ROOT" \
-  --epochs "$EPOCHS" \
-  --batch-size "$BATCH_SIZE" \
-  --num-workers "$NUM_WORKERS"
-
+#test clasiifer
+python embedding/test_classifier.py
 EXIT_CODE=$?
 echo "Job finished with exit code: $EXIT_CODE"
 exit $EXIT_CODE
