@@ -6,7 +6,7 @@ import random
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from PIL import Image
@@ -24,11 +24,9 @@ except ImportError as exc:  # pragma: no cover
         "PyTorch is required to use the generated Dataset; install torch first"
     ) from exc
 
-
 from handle_fen import fen_to_board_int
 from handle_game_CSV import pair_images_with_fens
 from splitting_images import slice_image_with_coordinates
-
 
 NUM_CLASSES = 17  # 0 is empty, 1-16 are piece IDs
 CLASS_MAP = {
@@ -66,7 +64,7 @@ def _validate_split(split: Dict[str, float]) -> Dict[str, float]:
     for key in ("train", "val", "test"):
         if key not in split:
             raise ValueError("Split dict must contain train, val, and test keys")
-        if split[key] <= 0:
+        if split[key] < 0:
             raise ValueError("Split ratios must be positive")
     return split
 
@@ -117,38 +115,67 @@ def _desired_class_counts(global_counts: np.ndarray, split: Dict[str, float]) ->
 
 
 def _score_split(
-    prospective: np.ndarray,
-    desired: np.ndarray,
-    board_load: int,
-    target_boards: float,
+        prospective: np.ndarray,
+        desired: np.ndarray,
+        board_load: int,
+        target_boards: float,
 ) -> float:
     class_penalty = np.linalg.norm(prospective - desired)
     load_penalty = max(0.0, (board_load - target_boards))
     return class_penalty + load_penalty
 
 
+def _identify_game(board_id: str, known_games: List[str]) -> str:
+    """
+    Attempts to match a board_id to a specific game name.
+    If no game matches (or no games known), treats the board as its own game.
+    """
+    if not known_games:
+        return board_id
+
+    # Sort games by length descending to match specific prefixes first
+    # e.g., match "Game_01_Part2" before "Game_01"
+    for game in sorted(known_games, key=len, reverse=True):
+        if board_id.startswith(game):
+            return game
+
+    return board_id  # Fallback: treat the board as the atomic unit
+
+
 def _group_stratified_split(
-    tiles: List[Dict],
-    split: Dict[str, float],
-    num_classes: int = NUM_CLASSES,
-    seed: int = 42,
+        tiles: List[Dict],
+        split: Dict[str, float],
+        known_games: List[str],
+        num_classes: int = NUM_CLASSES,
+        seed: int = 42,
 ) -> Dict[str, List[str]]:
     random.seed(seed)
-    boards = _group_tiles_by_board(tiles)
-    board_class_counts = _compute_board_class_counts(boards, num_classes)
 
-    total_counts = sum(board_class_counts.values())
+    # 1. Group tiles by Board
+    boards = _group_tiles_by_board(tiles)
+
+    # 2. Group Boards by Game
+    games: Dict[str, List[str]] = defaultdict(list)
+    for board_id in boards:
+        game_id = _identify_game(board_id, known_games)
+        games[game_id].append(board_id)
+
+    # 3. Compute Class Counts per Game
+    game_class_counts = _compute_game_class_counts(games, boards, num_classes)
+
+    total_counts = sum(game_class_counts.values())
     desired = _desired_class_counts(total_counts, split)
 
-    assignments = _assign_boards(
-        board_class_counts,
+    # 4. Assign Games to Splits
+    game_assignments = _assign_groups(
+        game_class_counts,
         split,
-        desired,
-        len(boards),
+        len(games),
         seed,
     )
 
-    return _collect_split_tiles(boards, assignments, split)
+    # 5. Expand back to tiles
+    return _collect_split_tiles_by_game(games, boards, game_assignments, split)
 
 
 def _group_tiles_by_board(tiles: List[Dict]) -> Dict[str, List[Dict]]:
@@ -158,96 +185,78 @@ def _group_tiles_by_board(tiles: List[Dict]) -> Dict[str, List[Dict]]:
     return boards
 
 
-def _compute_board_class_counts(boards: Dict[str, List[Dict]], num_classes: int) -> Dict[str, np.ndarray]:
-    board_class_counts: Dict[str, np.ndarray] = {}
-    for board_id, items in boards.items():
+def _compute_game_class_counts(
+        games: Dict[str, List[str]],
+        boards: Dict[str, List[Dict]],
+        num_classes: int
+) -> Dict[str, np.ndarray]:
+    game_counts: Dict[str, np.ndarray] = {}
+
+    for game_id, board_ids in games.items():
         counts = np.zeros(num_classes, dtype=float)
-        for item in items:
-            label = item["label"]
-            if label < num_classes:
-                counts[label] += 1
-        board_class_counts[board_id] = counts
-    return board_class_counts
+        for bid in board_ids:
+            for item in boards[bid]:
+                label = item["label"]
+                if label < num_classes:
+                    counts[label] += 1
+        game_counts[game_id] = counts
+
+    return game_counts
 
 
-def _assign_boards(
-    board_class_counts: Dict[str, np.ndarray],
-    split: Dict[str, float],
-    desired: Dict[str, np.ndarray],
-    num_boards: int,
-    seed: int,
+def _assign_groups(
+        group_counts: Dict[str, np.ndarray],
+        split: Dict[str, float],
+        num_groups: int,
+        seed: int,
 ) -> Dict[str, str]:
-    # Simple stratified assignment: shuffle boards by rarity, then assign to splits in order
-    # This ensures train gets filled first (since it has the highest ratio)
-    total_counts = sum(board_class_counts.values())
-    ordered_board_ids = _order_boards(board_class_counts, total_counts)
-    
-    # Shuffle with seed for reproducibility while preserving some rarity ordering
+    total_counts = sum(group_counts.values())
+    ordered_ids = _order_groups_by_rarity(group_counts, total_counts)
+
     rng = random.Random(seed)
-    rng.shuffle(ordered_board_ids)
-    
+    rng.shuffle(ordered_ids)
+
     assignments: Dict[str, str] = {}
-    split_names = sorted(split.keys(), key=lambda k: split[k], reverse=True)  # train, val, test
-    split_sizes = {name: int(num_boards * ratio) for name, ratio in split.items()}
-    
-    # Ensure we assign all boards by adjusting train to take remainder
-    remainder = num_boards - sum(split_sizes.values())
+    split_names = sorted(split.keys(), key=lambda k: split[k], reverse=True)
+    split_sizes = {name: int(num_groups * ratio) for name, ratio in split.items()}
+
+    remainder = num_groups - sum(split_sizes.values())
     split_sizes[split_names[0]] += remainder
-    
+
     current_idx = 0
     for split_name in split_names:
         size = split_sizes[split_name]
         for _ in range(size):
-            if current_idx < len(ordered_board_ids):
-                assignments[ordered_board_ids[current_idx]] = split_name
+            if current_idx < len(ordered_ids):
+                assignments[ordered_ids[current_idx]] = split_name
                 current_idx += 1
-    
+
     return assignments
 
 
-def _collect_split_tiles(
-    boards: Dict[str, List[Dict]],
-    assignments: Dict[str, str],
-    split: Dict[str, float],
+def _collect_split_tiles_by_game(
+        games: Dict[str, List[str]],
+        boards: Dict[str, List[Dict]],
+        game_assignments: Dict[str, str],
+        split: Dict[str, float],
 ) -> Dict[str, List[str]]:
     split_tiles: Dict[str, List[str]] = {name: [] for name in split}
-    for board_id, board_tiles in boards.items():
-        destination = assignments[board_id]
-        split_tiles[destination].extend(tile["image"] for tile in board_tiles)
+
+    for game_id, board_ids in games.items():
+        destination = game_assignments[game_id]
+        for bid in board_ids:
+            split_tiles[destination].extend(tile["image"] for tile in boards[bid])
+
     return split_tiles
 
 
-def _order_boards(board_class_counts: Dict[str, np.ndarray], total_counts: np.ndarray) -> List[str]:
+def _order_groups_by_rarity(group_counts: Dict[str, np.ndarray], total_counts: np.ndarray) -> List[str]:
     def rarity_score(counts: np.ndarray) -> float:
+        # Heavily weight presence of rare classes
         rare_weights = np.where(total_counts > 0, 1.0 / (total_counts + 1e-6), 0.0)
         return float((counts * rare_weights).sum())
 
-    return sorted(board_class_counts, key=lambda b: rarity_score(board_class_counts[b]), reverse=True)
-
-
-def _choose_split(
-    counts: np.ndarray,
-    split: Dict[str, float],
-    desired: Dict[str, np.ndarray],
-    target_boards: Dict[str, float],
-    current_counts: Dict[str, np.ndarray],
-    current_boards: Dict[str, int],
-) -> str:
-    best_split_name = None
-    best_score = float("inf")
-    for split_name in split.keys():
-        prospective_counts = current_counts[split_name] + counts
-        prospective_boards = current_boards[split_name] + 1
-        score = _score_split(
-            prospective_counts,
-            desired[split_name],
-            prospective_boards,
-            target_boards[split_name],
-        )
-        if score < best_score:
-            best_score = score
-            best_split_name = split_name
-    return best_split_name or "train"
+    return sorted(group_counts, key=lambda g: rarity_score(group_counts[g]), reverse=True)
 
 
 def build_manifest(config_path: Path) -> Dict:
@@ -259,9 +268,16 @@ def build_manifest(config_path: Path) -> Dict:
     split = _validate_split(config.get("split", DEFAULT_SPLIT))
     seed = int(config.get("seed", 42))
 
+    # We track known game names to perform Game-Level splitting later
+    known_game_names: List[str] = []
+
     if data_root_path:
+        # Generate tiles and discover game names
+        games_found = _discover_games(data_root_path)
+        known_game_names = [g_name for g_name, _, _ in games_found]
+
         _generate_tiles_from_games(
-            data_root_path,
+            games_found,
             raw_tiles_dir,
             overlap_percent,
             final_size,
@@ -269,7 +285,9 @@ def build_manifest(config_path: Path) -> Dict:
         )
 
     tiles = _gather_tiles(raw_tiles_dir, embedding_dir_path, embedding_ext)
-    split_tiles = _group_stratified_split(tiles, split, NUM_CLASSES, seed)
+
+    # Pass known_games to enable Game-Level splitting
+    split_tiles = _group_stratified_split(tiles, split, known_game_names, NUM_CLASSES, seed)
 
     manifest = {
         "config": {
@@ -298,17 +316,16 @@ def build_manifest(config_path: Path) -> Dict:
 
 
 def _compute_path_root(
-    config_path: Path,
-    raw_tiles_dir: Path,
-    data_root: Optional[Path],
-    embedding_dir: Optional[Path],
+        config_path: Path,
+        raw_tiles_dir: Path,
+        data_root: Optional[Path],
+        embedding_dir: Optional[Path],
 ) -> Path:
     candidates = [raw_tiles_dir]
     if data_root:
         candidates.append(data_root)
     if embedding_dir:
         candidates.append(embedding_dir)
-    # Include config location as tiebreaker for a stable relative root
     candidates.append(config_path.parent)
     common = os.path.commonpath([str(p) for p in candidates])
     return Path(common)
@@ -359,17 +376,16 @@ def save_split_indices(manifest: Dict, output_dir: Path) -> None:
 
 
 def _generate_tiles_from_games(
-    data_root: Path,
-    raw_tiles_dir: Path,
-    overlap_percent: float,
-    final_size: Tuple[int, int],
-    zero_padding: bool,
+        games_list: List[Tuple[str, Path, Path]],
+        raw_tiles_dir: Path,
+        overlap_percent: float,
+        final_size: Tuple[int, int],
+        zero_padding: bool,
 ) -> None:
     raw_tiles_dir.mkdir(parents=True, exist_ok=True)
-    games = _discover_games(data_root)
-    for csv_path, images_dir in games:
+    # games_list now contains (game_name, csv_path, images_dir)
+    for game_name, csv_path, images_dir in games_list:
         pairs = pair_images_with_fens(str(csv_path), str(images_dir))
-        game_name = Path(csv_path).stem
         print("Generating tiles for game", game_name)
         for image_path, fen in pairs:
             board = fen_to_board_int(fen)
@@ -384,8 +400,11 @@ def _generate_tiles_from_games(
             )
 
 
-def _discover_games(data_root: Path) -> List[Tuple[Path, Path]]:
-    games: List[Tuple[Path, Path]] = []
+def _discover_games(data_root: Path) -> List[Tuple[str, Path, Path]]:
+    """
+    Returns list of (game_name, csv_path, images_dir)
+    """
+    games: List[Tuple[str, Path, Path]] = []
     for game_dir in sorted(data_root.iterdir()):
         if not game_dir.is_dir():
             continue
@@ -393,7 +412,9 @@ def _discover_games(data_root: Path) -> List[Tuple[Path, Path]]:
         images_dir = game_dir / "tagged_images"
         if not csv_files or not images_dir.exists():
             continue
-        games.append((csv_files[0], images_dir))
+        # Use folder name or CSV stem as game name
+        game_name = csv_files[0].stem
+        games.append((game_name, csv_files[0], images_dir))
     if not games:
         raise RuntimeError(f"No game folders with CSV and tagged_images found under {data_root}")
     return games
@@ -402,17 +423,14 @@ def _discover_games(data_root: Path) -> List[Tuple[Path, Path]]:
 class ChessSquaresDataset(Dataset):
     """
     Torch Dataset for chess square tiles.
-
-    Each item returns a dict with keys: image (Tensor), label (int), board_id (str), path (str).
-    If embeddings are available and use_embeddings=True, image is replaced by the loaded embedding array.
     """
 
     def __init__(
-        self,
-        manifest_path: Path,
-        split: str = "train",
-        transform=None,
-        use_embeddings: bool = False,
+            self,
+            manifest_path: Path,
+            split: str = "train",
+            transform=None,
+            use_embeddings: bool = False,
     ):
         self.manifest_path = Path(manifest_path)
         self.data = json.loads(self.manifest_path.read_text())
@@ -454,7 +472,7 @@ class ChessSquaresDataset(Dataset):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build stratified board-level train/val/test splits.")
+    parser = argparse.ArgumentParser(description="Build stratified game-level train/val/test splits.")
     parser.add_argument("--config", required=True, help="Path to JSON or YAML config file.")
     parser.add_argument(
         "--output",
