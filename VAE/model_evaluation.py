@@ -183,38 +183,66 @@ def get_consistency_scores(model, dataset, device="cuda"):
     return np.concatenate(consistency_scores)
 
 
-def get_multicycle_scores(model, dataset, cycles=3, device="cuda"):
+def get_multicycle_scores(model, dataset, max_cycles=6, device="cuda"):
     dataloader = DataLoader(dataset, batch_size=32, shuffle=False)
     model.eval()
     model.to(device)
-    drift_scores = []
 
-    print(f"Calculating Multi-Cycle Drift ({cycles} cycles)...")
+    # Dictionary to store cumulative scores for each cycle: {1: [], 2: [], ...}
+    drift_results = {i: [] for i in range(1, max_cycles + 1)}
+
+    print(f"Calculating Multi-Cycle Drift (up to {max_cycles} cycles) in a single pass...")
+
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Multi-Cycle Drift")):
             imgs = batch["image"].to(device)
-            mu_current, _ = model.encode(imgs)
-            total_drift = torch.zeros(imgs.size(0)).to(device)
 
-            for i in range(cycles):
+            # Initial encoding
+            mu_current, _ = model.encode(imgs)
+
+            # Initialize cumulative drift for this batch
+            batch_cumulative_drift = torch.zeros(imgs.size(0)).to(device)
+
+            for cycle_i in range(1, max_cycles + 1):
+                # 1. Decode -> Re-encode
                 recon = model.decode(mu_current)
                 mu_next, _ = model.encode(recon)
-                dist = torch.norm(mu_current - mu_next, p=2, dim=1)
-                total_drift += dist
+
+                # 2. Calculate distance for this specific step
+                step_dist = torch.norm(mu_current - mu_next, p=2, dim=1)
+
+                # 3. Add to total drift
+                batch_cumulative_drift += step_dist
+
+                # 4. Save the CURRENT cumulative total to the dictionary
+                drift_results[cycle_i].append(batch_cumulative_drift.cpu().numpy())
+
+                # 5. Update latent for next cycle
                 mu_current = mu_next
 
-            drift_scores.append(total_drift.cpu().numpy())
+    # Concatenate lists into numpy arrays for each cycle key
+    final_scores = {k: np.concatenate(v) for k, v in drift_results.items()}
 
-    return np.concatenate(drift_scores)
+    return final_scores
 
 
-def plot_worst_consistency(dataset, scores, title_text, top_k=10):
+def plot_worst_consistency(dataset, scores, title_text, top_k=100):
     # Sort indices by Highest Score (Worst Consistency) -> Descending order
     anomaly_indices = np.argsort(scores)[::-1][:top_k]
 
     print(f"Plotting top {top_k} images for: {title_text}")
-    fig, axes = plt.subplots(1, top_k, figsize=(20, 5))
-    if top_k == 1: axes = [axes]
+
+    # dynamic grid calculation
+    cols = int(np.ceil(np.sqrt(top_k)))
+    rows = int(np.ceil(top_k / cols))
+
+    fig, axes = plt.subplots(rows, cols, figsize=(2 * cols, 2.2 * rows))
+
+    # Flatten axes array for easy iteration
+    if top_k == 1:
+        axes = [axes]
+    else:
+        axes = axes.flatten()
 
     for i, idx in enumerate(anomaly_indices):
         img_tensor = dataset[idx]["image"]
@@ -224,10 +252,16 @@ def plot_worst_consistency(dataset, scores, title_text, top_k=10):
         img_np = (img_np - img_np.min()) / (img_np.max() - img_np.min())
 
         axes[i].imshow(img_np)
-        axes[i].set_title(f"Score: {score:.2f}\nIdx: {idx}")
+        # Simplified title to save space in grid
+        axes[i].set_title(f"{score:.2f}", fontsize=8)
+        axes[i].axis("off")
+
+    # Turn off unused axes if top_k doesn't perfectly fill the grid
+    for i in range(top_k, len(axes)):
         axes[i].axis("off")
 
     plt.suptitle(title_text)
+    plt.tight_layout()
     plt.show()
 
 
@@ -326,32 +360,32 @@ if __name__ == "__main__":
     # Load Dataset
     splits_dir = Path("data/splits")
     path_root = Path("data")
-    test_dataset = ChessTilesCSV(splits_dir / "test.csv", root=path_root)
+    test_dataset = ChessTilesCSV(splits_dir / "val.csv", root=path_root)
 
     # Create a general loader for functions that need it
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
     print(f"Dataset loaded. {len(test_dataset)} samples.")
     print("-" * 30)
 
-    # ----------------------------------------
-    # RUN EVAL 1: t-SNE
-    # ----------------------------------------
-    print("\n--- RUNNING T-SNE ---")
-    features, labels = extract_latent_vectors(model, test_loader, device=device)
-    plot_tsne(features, labels)
-
-    # ----------------------------------------
-    # RUN EVAL 2: STANDARD RECONSTRUCTION ERROR
-    # ----------------------------------------
-    print("\n--- RUNNING MSE RECONSTRUCTION ERROR ---")
-    show_top_anomalies(model, test_loader, top_k=30, device=device)
-
-    # ----------------------------------------
-    # RUN EVAL 3: ELLIPTIC ENVELOPE (LATENT DENSITY)
-    # ----------------------------------------
-    print("\n--- RUNNING ELLIPTIC ENVELOPE OUTLIER DETECTION ---")
-    visualize_latent_outliers_2(model, test_dataset, contamination=0.1, top_k=30, device=device)
-
+    # # ----------------------------------------
+    # # RUN EVAL 1: t-SNE
+    # # ----------------------------------------
+    # print("\n--- RUNNING T-SNE ---")
+    # features, labels = extract_latent_vectors(model, test_loader, device=device)
+    # plot_tsne(features, labels)
+    #
+    # # ----------------------------------------
+    # # RUN EVAL 2: STANDARD RECONSTRUCTION ERROR
+    # # ----------------------------------------
+    # print("\n--- RUNNING MSE RECONSTRUCTION ERROR ---")
+    # show_top_anomalies(model, test_loader, top_k=30, device=device)
+    #
+    # # ----------------------------------------
+    # # RUN EVAL 3: ELLIPTIC ENVELOPE (LATENT DENSITY)
+    # # ----------------------------------------
+    # print("\n--- RUNNING ELLIPTIC ENVELOPE OUTLIER DETECTION ---")
+    # visualize_latent_outliers_2(model, test_dataset, contamination=0.1, top_k=30, device=device)
+    #
     # ----------------------------------------
     # RUN EVAL 4: LATENT CYCLE CONSISTENCY (1 CYCLE)
     # ----------------------------------------
@@ -365,30 +399,27 @@ if __name__ == "__main__":
     plt.xlabel("Error")
     plt.show()
 
-    plot_worst_consistency(test_dataset, scores_cycle, "1-Cycle Consistency Anomalies", top_k=30)
+    plot_worst_consistency(test_dataset, scores_cycle, "1-Cycle Consistency Anomalies", top_k=100)
 
     # ----------------------------------------
     # RUN EVAL 5: MULTI-CYCLE DRIFT
     # ----------------------------------------
-    print("\n--- RUNNING MULTI-CYCLE DRIFT (2 Cycles) ---")
-    scores_drift = get_multicycle_scores(model, test_dataset, cycles=2, device=device)
-    plot_worst_consistency(test_dataset, scores_drift, "2-Cycle Drift Anomalies", top_k=30)
+    print("\n--- RUNNING MULTI-CYCLE DRIFTS  ---")
 
-    print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
-    scores_drift = get_multicycle_scores(model, test_dataset, cycles=3, device=device)
-    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
+    # Run ONLY ONCE for the maximum number of cycles you care about
+    max_cycles=10
+    all_drift_scores = get_multicycle_scores(model, test_dataset, max_cycles=10, device=device)
 
-    print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
-    scores_drift = get_multicycle_scores(model, test_dataset, cycles=4, device=device)
-    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
-
-    print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
-    scores_drift = get_multicycle_scores(model, test_dataset, cycles=5, device=device)
-    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
-
-    print("\n--- RUNNING MULTI-CYCLE DRIFT (3 Cycles) ---")
-    scores_drift = get_multicycle_scores(model, test_dataset, cycles=6, device=device)
-    plot_worst_consistency(test_dataset, scores_drift, "3-Cycle Drift Anomalies", top_k=30)
+    # Loop through the results to plot
+    # We start at 2 because you handled 1-cycle separately (or you can start at 1)
+    for cycle_num in range(1, max_cycles+1):
+        scores = all_drift_scores[cycle_num]
+        plot_worst_consistency(
+            test_dataset,
+            scores,
+            f"{cycle_num}-Cycle Drift Anomalies",
+            top_k=100
+        )
 
     # ----------------------------------------
     # RUN EVAL 6: LIKELIHOOD REGRET (Most expensive)
