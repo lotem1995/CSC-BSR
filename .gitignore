@@ -229,3 +229,10 @@ preprocessed_data/
 models/
 logs/
 results/ 
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bak
+embedding/*.pt*
+embedding/*.bak
