@@ -352,7 +352,7 @@ if __name__ == "__main__":
 
     # Load Model
     model = VAE()
-    weights_path = 'VAE/models_weights/cluster_trained/model_bs64_lr0.001_ep150_lat20_total_lossf13112878.92.pth'  # Update if needed
+    weights_path = 'VAE/models_weights/cluster_trained_data_leakage/model_bs64_lr0.001_ep150_lat20_total_lossf13112878.92.pth'  # Update if needed
     model.load_state_dict(torch.load(weights_path, map_location=device))
     model.to(device)
     print("Model loaded.")
