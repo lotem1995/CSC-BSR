@@ -360,7 +360,7 @@ if __name__ == "__main__":
     # Load Dataset
     splits_dir = Path("data/splits")
     path_root = Path("data")
-    test_dataset = ChessTilesCSV(splits_dir / "val.csv", root=path_root)
+    test_dataset = ChessTilesCSV(splits_dir / "test.csv", root=path_root)
 
     # Create a general loader for functions that need it
     test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
