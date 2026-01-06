@@ -30,7 +30,7 @@ from handle_game_CSV import pair_images_with_fens
 from splitting_images import slice_image_with_coordinates
 
 
-NUM_CLASSES = 17  # 0 is empty, 1-16 are piece IDs
+NUM_CLASSES = 18  # 0 is empty, 1-16 are piece IDs, 17 is hands
 CLASS_MAP = {
     0: "empty",
     1: "white_pawn",
@@ -45,6 +45,7 @@ CLASS_MAP = {
     14: "black_rook",
     15: "black_queen",
     16: "black_king",
+    17: "hands",
 }
 DEFAULT_SPLIT = {"train": 0.8, "val": 0.1, "test": 0.1}
 
