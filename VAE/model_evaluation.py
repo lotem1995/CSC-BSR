@@ -215,7 +215,7 @@ def get_multicycle_scores(model, dataset, max_cycles=6, device="cuda"):
                 batch_cumulative_drift += step_dist
 
                 # 4. Save the CURRENT cumulative total to the dictionary
-                drift_results[cycle_i].append(batch_cumulative_drift.cpu().numpy())
+                drift_results[cycle_i].append(batch_cumulative_drift.cpu().numpy().copy())
 
                 # 5. Update latent for next cycle
                 mu_current = mu_next
