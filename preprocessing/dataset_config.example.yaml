@@ -13,9 +13,9 @@ embedding_ext: .npy
 
 # Train/Val/Test split ratios (must sum to 1.0)
 split:
-  train: 0.8
+  train: 0.6
   val: 0.2
-  test: 0.0
+  test: 0.2
 
 # Reproducibility seed
 seed: 42

@@ -11,18 +11,10 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 from PIL import Image
 
-try:
-    import yaml  # type: ignore
-except ImportError:  # pragma: no cover
-    yaml = None
+import yaml
 
-try:
-    import torch
-    from torch.utils.data import Dataset
-except ImportError as exc:  # pragma: no cover
-    raise RuntimeError(
-        "PyTorch is required to use the generated Dataset; install torch first"
-    ) from exc
+import torch
+from torch.utils.data import Dataset
 
 from handle_fen import fen_to_board_int
 from handle_game_CSV import pair_images_with_fens
