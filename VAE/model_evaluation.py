@@ -407,13 +407,23 @@ if __name__ == "__main__":
     print("\n--- RUNNING MULTI-CYCLE DRIFTS  ---")
 
     # Run ONLY ONCE for the maximum number of cycles you care about
-    max_cycles=10
-    all_drift_scores = get_multicycle_scores(model, test_dataset, max_cycles=10, device=device)
+    max_cycles = 10
+    all_drift_scores = get_multicycle_scores(model, test_dataset, max_cycles=max_cycles, device=device)
 
     # Loop through the results to plot
-    # We start at 2 because you handled 1-cycle separately (or you can start at 1)
-    for cycle_num in range(1, max_cycles+1):
+    for cycle_num in range(1, max_cycles + 1):
         scores = all_drift_scores[cycle_num]
+
+        # -- Plot Histogram for this cycle ---
+        plt.figure(figsize=(8, 4))
+        plt.hist(scores, bins=50, color='orange', alpha=0.7, edgecolor='black')
+        plt.title(f"Distribution of {cycle_num}-Cycle Drift Scores")
+        plt.xlabel("Cumulative Drift Error")
+        plt.ylabel("Frequency")
+        plt.grid(axis='y', alpha=0.5)
+        plt.show()
+        # ------------------------------------------
+
         plot_worst_consistency(
             test_dataset,
             scores,
