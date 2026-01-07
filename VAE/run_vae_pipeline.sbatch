@@ -1,14 +1,14 @@
 #!/bin/bash
 #SBATCH --account=lifshitg
-#SBATCH --qos=normal
-#SBATCH --partition=gtx1080
+#SBATCH --qos=course
+#SBATCH --partition=gtx2080
 #SBATCH --time=0-12:00:00
 #SBATCH --job-name=vae_pipeline
 #SBATCH --output=vae_training-%J.log
 #SBATCH --error=vae_training-%J.err
 #SBATCH --mail-user=lifshitg@post.bgu.ac.il
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --gpus=gtx1080:1
+#SBATCH --gpus=gtx2080:1
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 
@@ -19,7 +19,7 @@ echo "Job started on $(hostname) at $(date)"
 
 # Load necessary system modules
 module load anaconda
-module load cuda/13.1
+module load cuda/12.6
 
 # Activate your Python environment
 source activate chess_vae

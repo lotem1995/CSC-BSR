@@ -8,7 +8,7 @@ import numpy as np
 from VAE.model_evaluation import get_multicycle_scores
 
 
-def find_optimal_cycles(model, id_dataset, ood_dataset, max_cycles=10, device="cuda"):
+def find_optimal_amount_of_cycles(model, id_dataset, ood_dataset, max_cycles=10, device="cuda"):
     # 1. Get scores for both datasets
     print("Processing ID data...")
     id_scores = get_multicycle_scores(model, id_dataset, max_cycles, device)
