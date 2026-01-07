@@ -72,7 +72,7 @@ fi
 
 # --- Step C: Train VAE ---
 echo "Starting VAE Training..."
-python ./VAE/train_VAE.py
+python -m VAE.train_VAE
 
 # ============================================================================
 # 4. SAVE RESULTS
