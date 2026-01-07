@@ -12,12 +12,12 @@ from preprocessing.load_dataset import get_train_dataloader, get_val_dataloader
 # --- Configuration ---
 BATCH_SIZE = 64
 LEARNING_RATE = 1e-3
-EPOCHS = 200
+EPOCHS = 300
 LATENT_DIM = 20
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # --- Validation Config ---
-PATIENCE = 5
+PATIENCE = 10
 MIN_DELTA = 0.1
 
 # --- Checkpoint Config ---
