@@ -216,7 +216,7 @@ data/preprocessed_data/
 data/splits/
 data/dataset_manifest.json
 embeddings/
-
+preprocessed_data/
 # Keep raw data but ignore large processed outputs
 checkpoints/
 *.err
