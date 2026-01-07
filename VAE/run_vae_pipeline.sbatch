@@ -1,14 +1,14 @@
 #!/bin/bash
-#SBATCH --account=lifshitg
+#SBATCH --account=coursefreifeld26
 #SBATCH --qos=course
-#SBATCH --partition=gtx2080
+#SBATCH --partition=rtx2080
 #SBATCH --time=0-12:00:00
 #SBATCH --job-name=vae_pipeline
-#SBATCH --output=vae_training-%J.log
+#SBATCH --output=vae_training-%J.out
 #SBATCH --error=vae_training-%J.err
 #SBATCH --mail-user=lifshitg@post.bgu.ac.il
 #SBATCH --mail-type=BEGIN,END,FAIL
-#SBATCH --gpus=gtx2080:1
+#SBATCH --gpus=rtx_2080:1
 #SBATCH --mem=16G
 #SBATCH --cpus-per-task=4
 
@@ -26,14 +26,14 @@ source activate chess_vae
 
 # --- Install dependencies based on your imports ---
 echo "Ensuring required libraries are installed..."
-pip install scikit-learn matplotlib seaborn tqdm torch torchvision numpy
+#pip install scikit-learn matplotlib seaborn tqdm torch torchvision numpy
 
 # Define persistent storage paths (UPDATED FOLDER NAME)
 PROJECT_ROOT="$HOME/CSC-BSR"
 RESULTS_DIR="$PROJECT_ROOT/results_vae_${SLURM_JOBID}"
 
 # Define Scratch path (Fast local SSD)
-SCRATCH_DIR="/scratch/$USER/$SLURM_JOBID"
+#SCRATCH_DIR="/scratch/$USER/$SLURM_JOBID"
 
 echo "Persistent Project Root: $PROJECT_ROOT"
 echo "Scratch Working Dir: $SCRATCH_DIR"
@@ -41,14 +41,14 @@ echo "Scratch Working Dir: $SCRATCH_DIR"
 # ============================================================================
 # 2. DATA TRANSFER TO SCRATCH
 # ============================================================================
-echo "Copying project to local scratch for faster I/O..."
+#echo "Copying project to local scratch for faster I/O..."
 # Ensure the scratch directory exists
-mkdir -p "$SCRATCH_DIR"
+#mkdir -p "$SCRATCH_DIR"
 # Copy the contents of your CSC-BSR folder to scratch
-cp -r "$PROJECT_ROOT/"* "$SCRATCH_DIR/"
+#cp -r "$PROJECT_ROOT/"* "$SCRATCH_DIR/"
 
 # Move into scratch directory
-cd "$SCRATCH_DIR" || exit 1
+#cd "$SCRATCH_DIR" || exit 1
 
 # ============================================================================
 # 3. WORKFLOW EXECUTION
@@ -56,7 +56,7 @@ cd "$SCRATCH_DIR" || exit 1
 
 # --- Step A: Build Dataset ---
 echo "Starting Dataset Build..."
-python -m build_dataset \
+python preprocessing/build_dataset.py \
     --config preprocessing/dataset_config.example.yaml \
     --output data/splits/manifest.json \
     --split-indices-dir data/splits
@@ -72,7 +72,7 @@ fi
 
 # --- Step C: Train VAE ---
 echo "Starting VAE Training..."
-python train_VAE.py
+python ./VAE/train_VAE.py
 
 # ============================================================================
 # 4. SAVE RESULTS
@@ -100,6 +100,6 @@ cp *.pdf "$RESULTS_DIR/" 2>/dev/null || true
 echo "All results saved to: $RESULTS_DIR"
 
 # Clean up scratch
-rm -rf "$SCRATCH_DIR"
+#rm -rf "$SCRATCH_DIR"
 
 echo "Job completed successfully at $(date)"
