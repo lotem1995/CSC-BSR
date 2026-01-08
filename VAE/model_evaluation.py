@@ -352,7 +352,7 @@ if __name__ == "__main__":
 
     # Load Model
     model = VAE()
-    weights_path = 'VAE/models_weights/cluster_trained_data_leakage/model_bs64_lr0.001_ep150_lat20_total_lossf13112878.92.pth'  # Update if needed
+    weights_path = 'VAE/models_weights/checkpoints/best_vae_model.pth'  # Update if needed
     model.load_state_dict(torch.load(weights_path, map_location=device))
     model.to(device)
     print("Model loaded.")
@@ -376,10 +376,10 @@ if __name__ == "__main__":
     #
     # # ----------------------------------------
     # # RUN EVAL 2: STANDARD RECONSTRUCTION ERROR
-    # # ----------------------------------------
-    # print("\n--- RUNNING MSE RECONSTRUCTION ERROR ---")
-    # show_top_anomalies(model, test_loader, top_k=30, device=device)
-    #
+    # ----------------------------------------
+    print("\n--- RUNNING MSE RECONSTRUCTION ERROR ---")
+    show_top_anomalies(model, test_loader, top_k=30, device=device)
+
     # # ----------------------------------------
     # # RUN EVAL 3: ELLIPTIC ENVELOPE (LATENT DENSITY)
     # # ----------------------------------------

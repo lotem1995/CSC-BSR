@@ -87,11 +87,11 @@ def train(train_loader, val_loader):
             # Save BEST model
             torch.save(model.state_dict(), "best_vae_model.pth")
             print("Validation loss improved. Saved best model.")
-        else:
-            patience_counter += 1
-            if patience_counter >= PATIENCE:
-                print(f"Early stopping triggered at epoch {epoch + 1}")
-                break
+        # else:
+        #     patience_counter += 1
+        #     if patience_counter >= PATIENCE:
+        #         print(f"Early stopping triggered at epoch {epoch + 1}")
+        #         break
 
     print("Training Complete!")
     return model
