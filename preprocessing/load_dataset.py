@@ -2,14 +2,13 @@ import pandas as pd
 from pathlib import Path
 from PIL import Image
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset,DataLoader, TensorDataset, WeightedRandomSampler
 import numpy as np
-from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from torchvision import transforms
 import matplotlib.pyplot as plt 
 from collections import Counter
 splits_dir = Path("data/splits")
-path_root = Path("data")  # stored in manifest as config.path_root; adjust if you move things
+path_root = Path(".")  # stored in manifest as config.path_root; adjust if you move things
 
 class ChessTilesCSV(Dataset):
     def __init__(self, csv_path, root, transform=None, use_embeddings=False):
@@ -33,8 +32,6 @@ class ChessTilesCSV(Dataset):
             with Image.open(img_path) as img:
                 img = img.convert("RGB")
                 image_tensor = torch.from_numpy(np.array(img)).permute(2,0,1).float()/255.0
-        if self.transform:
-            image_tensor = self.transform(img)
         return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
 
 def paint_camel():
