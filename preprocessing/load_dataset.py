@@ -8,7 +8,7 @@ from torchvision import transforms
 import matplotlib.pyplot as plt 
 from collections import Counter
 splits_dir = Path("data/splits")
-path_root = Path("data")  # stored in manifest as config.path_root; adjust if you move things
+path_root = Path(".")  # stored in manifest as config.path_root; adjust if you move things
 
 class ChessTilesCSV(Dataset):
     def __init__(self, csv_path, root, transform=None, use_embeddings=False):

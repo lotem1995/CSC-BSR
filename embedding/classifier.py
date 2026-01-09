@@ -24,7 +24,7 @@ from PIL import Image
 import sys
 
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
-from splitting_images import slice_image_with_coordinates
+from preprocessing.splitting_images import slice_image_with_coordinates
 
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/embadding')
 from embedding_base import EmbeddingModel
@@ -345,7 +345,7 @@ class FENClassifier:
         
         Args:
             board_image: PIL Image of full chess board
-            method: "knn" or "mahalanobis"
+            method: "knn" or "mahalanobis" or inner classifier
             k: Number of neighbors (used only for KNN)
             
         Returns:
@@ -359,6 +359,9 @@ class FENClassifier:
             return self.predict_knn(tile_embeddings, k)
         elif method == "mahalanobis":
             return self.predict_mahalanobis(tile_embeddings)
+        ## TODO: Add inner classifier support
+        # elif method=="inner":
+        #     return self.embedding_extractor.classify_fen(board_image):
         else:
             raise ValueError(f"Unknown method: {method}")
     

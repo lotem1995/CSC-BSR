@@ -15,7 +15,7 @@ sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/embadding')
 
 from splitting_images import slice_image_with_coordinates
-from main import QwenVisionEmbedding
+from qwen3 import QwenVisionEmbedding
 
 
 def test_embedding_pipeline():
