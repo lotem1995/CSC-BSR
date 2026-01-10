@@ -15,23 +15,17 @@ Classification methods:
 
 import torch
 import numpy as np
-from typing import Tuple, Optional, Union
-from sklearn.preprocessing import StandardScaler
-from sklearn.covariance import LedoitWolf
+from typing import Tuple, Optional
 import tempfile
 import os
 from PIL import Image
 import sys
-
-from sqlalchemy import false
 
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 from preprocessing.splitting_images import slice_image_with_coordinates
 
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/embadding')
 from embedding_base import EmbeddingModel
-from embedding.qwen3 import QwenVisionEmbedding
-from dinov2 import DINOv2Embedding
 
 
 class FENClassifier:
