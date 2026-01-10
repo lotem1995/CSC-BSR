@@ -380,6 +380,7 @@ class FENClassifier:
             return 20.0
 
             # 2. Calculation
+        print("calculating mahal threshold")
         scaler = self.tile_scalers[tile_idx]
         inv_cov = self.tile_mahal_inv_covs[tile_idx]
         class_means = self.tile_class_means[tile_idx]
@@ -406,9 +407,10 @@ class FENClassifier:
 
         # 4. SAFETY FLOOR (Crucial for high dimensions)
         # Prevent threshold from being impossibly low if validation data is too clean
+        print(f"calc_threshold: {calc_threshold}")
         final_threshold = max(calc_threshold, 15.0)
 
-        return final_threshold
+        return calc_threshold
 
     def _calc_knn_threshold(self, tile_idx: int, k: int) -> float:
         # Get all stored embeddings
@@ -476,11 +478,11 @@ class FENClassifier:
         if method == "mahalanobis":
             if len(self.tile_mahal_inv_covs) == 0:
                 raise ValueError("Must call build_index() first")
-            return self._predict_ood_mahalanobis(tile_embeddings, threshold or 3.0)
+            return self._predict_ood_mahalanobis(tile_embeddings, threshold)
         elif method == "knn":
             if len(self.tile_embeddings_index) == 0:
                 raise ValueError("Must call build_index() first")
-            return self._predict_ood_knn(tile_embeddings, k, threshold or 0.7)
+            return self._predict_ood_knn(tile_embeddings, k, threshold)
         else:
             raise ValueError(f"Unknown method: {method}")
     
@@ -498,9 +500,10 @@ class FENClassifier:
                 is_ood[tile_idx] = True
                 continue
 
-            if threshold is None:
+            current_threshold = threshold
+            if current_threshold is None:
                 # Calculate or fetch cached threshold automatically
-                threshold = self._get_or_calculate_threshold(tile_idx, "mahalanobis")
+                current_threshold = self._get_or_calculate_threshold(tile_idx, "mahalanobis")
             
             # Get query embedding
             query_emb = tile_embeddings[tile_idx].unsqueeze(0)
@@ -524,16 +527,10 @@ class FENClassifier:
             # Get prediction and min distance
             predicted_label = min(class_distances, key=class_distances.get)
             min_distance = class_distances[predicted_label]
-
-            if tile_idx == 0 and min_distance > threshold:
-                print(f"\n[DEBUG OOD FAIL] Tile {tile_idx}:")
-                print(f"  > Threshold (from Val): {threshold:.4f}")
-                print(f"  > Actual Distance (Test): {min_distance:.4f}")
-                print(f"  > Difference: {min_distance - threshold:.4f}")
             
             predictions[tile_idx] = predicted_label
             confidences[tile_idx] = np.exp(-min_distance)
-            is_ood[tile_idx] = min_distance > threshold
+            is_ood[tile_idx] = min_distance > current_threshold
         
         return predictions, confidences, is_ood
     
@@ -551,8 +548,9 @@ class FENClassifier:
                 is_ood[tile_idx] = True
                 continue
 
-            if threshold is None:
-                threshold = self._get_or_calculate_threshold(tile_idx, "knn", k)
+            current_threshold = threshold
+            if current_threshold is None:
+                current_threshold = self._get_or_calculate_threshold(tile_idx, "knn", k)
             
             # Get query embedding (normalized)
             query_emb = tile_embeddings[tile_idx].unsqueeze(0)
@@ -580,8 +578,8 @@ class FENClassifier:
             
             predictions[tile_idx] = predicted_label
             confidences[tile_idx] = top_k_scores.mean().item()
-            is_ood[tile_idx] = max_similarity < threshold  # Low similarity = OOD
-        
+            is_ood[tile_idx] = max_similarity < current_threshold  # Low similarity = OOD
+
         return predictions, confidences, is_ood
     
     def save(self, path: str):
