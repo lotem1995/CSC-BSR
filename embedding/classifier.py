@@ -58,7 +58,7 @@ class FENClassifier:
         self.knn_similarity_threshold = 0.60
         self.knn_ood_using_similarity = False
 
-        self.knn_distance_threshold = 1.0
+        self.knn_distance_threshold = 1.1
         self.knn_ood_using_distance = True
 
         self.knn_MIN_CONSENSUS = 0.7
@@ -169,7 +169,7 @@ class FENClassifier:
         else:
             raise ValueError(f"Unknown method: {method}")
 
-    def build_index(self):
+    def update_thresholds(self):
         print(f"Building Global Index with {len(self.global_embeddings)} samples...")
 
         if len(self.global_embeddings) == 0:

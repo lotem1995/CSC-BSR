@@ -389,7 +389,7 @@ def main():
 
     # Step 5: Build index (uses the data currently in memory)
     print(f"\n5. Building KNN indices...")
-    classifier.build_index()
+    classifier.update_thresholds()
     
     # Step 6: Evaluate on test set
     print(f"\n6. Evaluating on test set...")
