@@ -430,8 +430,15 @@ class FENClassifier:
         if len(ith_neighbor_scores) == 0:
             return 0.7  # Fallback default
 
-        # Set threshold to the 5th percentile (reject bottom 5% scores)
-        return float(np.percentile(ith_neighbor_scores, 1))
+        # CHANGE 1: Use 1st percentile (More relaxed than 5th)
+        calc_threshold = float(np.percentile(ith_neighbor_scores, 1))
+
+        # CHANGE 2: Safety Ceiling (The Ultimate Fix)
+        # "Even if the validation data is perfect (0.98),
+        #  allow anything above 0.90 to pass."
+        final_threshold = min(calc_threshold, 0.90)
+
+        return final_threshold
 
     def _get_or_calculate_threshold(self, tile_idx: int, method: str, k: int = 3) -> float:
         # Check cache: Do we have it?
