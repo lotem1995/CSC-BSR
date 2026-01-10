@@ -58,8 +58,8 @@ class FENClassifier:
         self.knn_similarity_threshold = 0.60
         self.knn_ood_using_similarity = False
 
-        self.knn_distance_threshold = 1.2  # Default (will be auto-calibrated)
-        self.knn_ood_using_distance = True  # Enable the new check
+        self.knn_distance_threshold = 1.6
+        self.knn_ood_using_distance = True
 
         self.knn_MIN_CONSENSUS = 0.7
         self.knn_ood_using_vote = False
@@ -226,6 +226,8 @@ class FENClassifier:
 
         # Safety floor for distance score (Adjust as needed, 1.0 is roughly dist=1.0)
         self.knn_distance_threshold = max(calc_thresh_dist, self.knn_distance_threshold)
+        print(
+            f"knn_distance_threshold set to: {self.knn_similarity_threshold:.4f} calc_thresh_dist:{calc_thresh_dist:.4f}")
 
         print(
             f"Thresholds set | AvgSim: {self.knn_similarity_threshold:.4f} | 1/Dist(k): {self.knn_distance_threshold:.4f}")
