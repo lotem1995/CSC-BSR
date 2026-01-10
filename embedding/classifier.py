@@ -20,6 +20,7 @@ import tempfile
 import os
 from PIL import Image
 import sys
+from collections import Counter
 
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 from preprocessing.splitting_images import slice_image_with_coordinates
@@ -57,8 +58,11 @@ class FENClassifier:
         self.knn_similarity_threshold = 0.60
         self.knn_ood_using_similarity = False
 
+        self.knn_distance_threshold = 1.2  # Default (will be auto-calibrated)
+        self.knn_ood_using_distance = True  # Enable the new check
+
         self.knn_MIN_CONSENSUS = 0.7
-        self.knn_ood_using_vote = True
+        self.knn_ood_using_vote = False
 
         # Embedding extractor setup (Keep as is)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -176,8 +180,6 @@ class FENClassifier:
         # Move to GPU immediately for speed
         self.index_embeddings = torch.stack(self.global_embeddings).to(self.device)
         self.index_labels = torch.tensor(self.global_labels).to(self.device)
-
-        # 2. Normalize vectors (Required for Cosine Similarity)
         self.index_embeddings = torch.nn.functional.normalize(self.index_embeddings, p=2, dim=1)
 
         print(f"Index built. Shape: {self.index_embeddings.shape}")
@@ -200,24 +202,33 @@ class FENClassifier:
         # We want the *next* k matches.
         # So we ask for k+1, and throw away the first column.
         k_calib = self.knn_k  # Must match the k used in prediction!
+        top_k_vals, _ = torch.topk(sim_matrix, k=k_calib + 1, dim=1) # Get top k+1 scores
+        neighbor_scores = top_k_vals[:, 1:] # Remove the first column (the self-match of 1.0)
 
-        # Get top k+1 scores
-        top_k_vals, _ = torch.topk(sim_matrix, k=k_calib + 1, dim=1)
-
-        # Remove the first column (the self-match of 1.0)
-        neighbor_scores = top_k_vals[:, 1:]
-
-        # Calculate the AVERAGE score for every sample
+        # --- CALIBRATION 1: Average Similarity ---
         avg_scores = neighbor_scores.mean(dim=1)
+        calc_thresh_sim = float(np.percentile(avg_scores.cpu().numpy(), 1))
+        # Safety ceiling for similarity (Average)
+        self.knn_similarity_threshold = min(calc_thresh_sim, self.knn_similarity_threshold)
 
-        # Now set the threshold based on these AVERAGES
-        # Note: We stick to percentile 1 (not 0.1) for stability
-        calc_threshold = float(np.percentile(avg_scores.cpu().numpy(), 1))
+        print(f"Global OOD Threshold (Average-Based) set to: {self.knn_similarity_threshold:.4f} calc_thresh_sim:{calc_thresh_sim:.4f}")
 
-        # Update safety ceiling (Average is usually lower, so we lower the ceiling too)
-        self.knn_similarity_threshold = min(calc_threshold, self.knn_similarity_threshold)
 
-        print(f"Global OOD Threshold (Average-Based) set to: {self.knn_similarity_threshold:.4f} calc_threshold:{calc_threshold:.4f}")
+
+        # --- CALIBRATION 2: 1/Distance to k-th Neighbor ---
+        # Get the k-th score (the last column of neighbor_scores)
+        kth_sims = neighbor_scores[:, -1]
+
+        # Convert to Euclidean Distance: d = sqrt(2 * (1 - sim))
+        kth_dists = torch.sqrt(torch.clamp(2 * (1 - kth_sims), min=0))
+        kth_scores = 1.0 / (kth_dists + 1e-9) # Convert to Score: 1 / (d + epsilon)
+        calc_thresh_dist = float(np.percentile(kth_scores.cpu().numpy(), 1))
+
+        # Safety floor for distance score (Adjust as needed, 1.0 is roughly dist=1.0)
+        self.knn_distance_threshold = max(calc_thresh_dist, self.knn_distance_threshold)
+
+        print(
+            f"Thresholds set | AvgSim: {self.knn_similarity_threshold:.4f} | 1/Dist(k): {self.knn_distance_threshold:.4f}")
 
     def save(self, path: str):
         """Save GLOBAL classifier to disk"""
@@ -299,9 +310,6 @@ class FENClassifier:
         device = self.index_embeddings.device
         tile_embeddings = tile_embeddings.to(device)
 
-        # Use the auto-calculated threshold if none provided
-        current_threshold = self.knn_similarity_threshold
-
         query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
         sim_matrix = torch.mm(query, self.index_embeddings.t())
         top_k_scores, top_k_indices = torch.topk(sim_matrix, k=self.knn_k, dim=1)
@@ -315,35 +323,44 @@ class FENClassifier:
         MIN_CONSENSUS = self.knn_MIN_CONSENSUS
 
         for i in range(64):
+            # 1. Get Neighbors & Labels
             indices = top_k_indices[i].cpu().tolist()
             neighbor_labels = self.index_labels[indices].tolist()
 
-            # Count votes
-            # e.g., neighbor_labels = [0, 0, 0, 1, 2] -> {0: 3, 1: 1, 2: 1}
-            from collections import Counter
+            # 2. Vote Logic (Check 3)
             vote_counts = Counter(neighbor_labels)
-
-            # Get winner
             predicted_label, best_vote_count = vote_counts.most_common(1)[0]
-
-            # Calculate Consensus Ratio (e.g., 3/5 = 0.6)
             consensus_ratio = best_vote_count / self.knn_k
 
-            max_similarity = top_k_scores[i, 0].item()
+            # 3. Calculate Metrics
+            # Metric A: Average Similarity
             avg_similarity = top_k_scores[i].mean().item()
 
+            # Metric B: 1 / Distance to k-th Neighbor
+            kth_similarity = top_k_scores[i, -1].item()
+            kth_dist = np.sqrt(max(0, 2 * (1 - kth_similarity)))
+            ood_score_kth = 1.0 / (kth_dist + 1e-9)
+
             predictions[i] = predicted_label
-            confidences[i] = max_similarity
+            confidences[i] = avg_similarity  # Keep using Avg Sim as the main confidence score
 
-            # === HYBRID OOD CHECK ===
-            # 1. Distance Check: Must be similar enough (Your current check)
-            is_distant = avg_similarity < current_threshold
+            # === TRIPLE OOD CHECK ===
+            # Check 1: Average Similarity (Robustness)
+            is_low_avg = avg_similarity < self.knn_similarity_threshold
 
-            # 2. Ambiguity Check: Neighbors must agree (The new check)
-            is_ambiguous = consensus_ratio < MIN_CONSENSUS
+            # Check 2: k-th Distance (Boundary Safety)
+            is_far_kth = ood_score_kth < self.knn_distance_threshold
 
-            # Flag as OOD if EITHER is true
-            is_ood[i] = (self.knn_ood_using_similarity and is_distant) or (self.knn_ood_using_vote and is_ambiguous)
+            # Check 3: Consensus (Ambiguity)
+            is_ambiguous = consensus_ratio < self.knn_MIN_CONSENSUS
+
+            # Combine Checks
+            # If ANY enabled check fails, flag as OOD
+            is_ood[i] = (
+                    (self.knn_ood_using_similarity and is_low_avg) or
+                    (self.knn_ood_using_distance and is_far_kth) or
+                    (self.knn_ood_using_vote and is_ambiguous)
+            )
 
         return predictions, confidences, is_ood
 
