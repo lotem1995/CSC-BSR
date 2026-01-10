@@ -403,7 +403,7 @@ class FENClassifier:
             return 20.0  # Increased fallback from 3.0 to 20.0 (realistic for DINO)
 
         # 3. Percentile Calculation
-        calc_threshold = float(np.percentile(distances, 99))
+        calc_threshold = float(np.percentile(distances, 95))
 
         # 4. SAFETY FLOOR (Crucial for high dimensions)
         # Prevent threshold from being impossibly low if validation data is too clean
@@ -431,7 +431,7 @@ class FENClassifier:
             return 0.7  # Fallback default
 
         # Set threshold to the 5th percentile (reject bottom 5% scores)
-        return float(np.percentile(ith_neighbor_scores, 5))
+        return float(np.percentile(ith_neighbor_scores, 1))
 
     def _get_or_calculate_threshold(self, tile_idx: int, method: str, k: int = 3) -> float:
         # Check cache: Do we have it?
