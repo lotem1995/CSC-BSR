@@ -250,8 +250,7 @@ def evaluate_on_test_csv(
         #     predictions, confidences = classifier.predict_mahalanobis(tile_embeddings)
         predictions, confidences, is_ood = classifier.predict_with_ood(
             tile_embeddings,
-            method=method,
-            threshold=None
+            method=method
         )
 
         # Compute accuracy for this board

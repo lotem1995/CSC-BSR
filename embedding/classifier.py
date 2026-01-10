@@ -55,13 +55,13 @@ class FENClassifier:
         self.knn_k = 5
 
         self.knn_similarity_threshold = 0.60
-
         self.knn_ood_using_similarity = False
 
         self.knn_MIN_CONSENSUS = 0.7
         self.knn_ood_using_vote = True
 
         # Embedding extractor setup (Keep as is)
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.embedding_extractor = embedding_extractor
         self.embedding_dim = self.embedding_extractor.get_embedding_dim()
 
@@ -148,6 +148,23 @@ class FENClassifier:
         tile_embeddings = self.extract_board_embeddings(board_image)
         self.add_fen_position(fen, tile_embeddings, board_state)
 
+    def predict_with_ood(self, tile_embeddings: torch.Tensor,
+                         method: str = "knn",  # Default to knn for global
+                         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+        # Check GLOBAL index, not per-tile index
+        if self.index_embeddings is None:
+            raise ValueError("Must call build_index() first")
+
+        if method == "knn":
+            return self._predict_ood_knn(tile_embeddings)
+        elif method == "mahalanobis":
+            # Mahalanobis is harder to implement globally; sticking to KNN is recommended
+            print("Warning: Global Mahalanobis not implemented. Falling back to KNN.")
+            return self._predict_ood_knn(tile_embeddings)
+        else:
+            raise ValueError(f"Unknown method: {method}")
+
     def build_index(self):
         print(f"Building Global Index with {len(self.global_embeddings)} samples...")
 
@@ -157,9 +174,8 @@ class FENClassifier:
 
         # 1. Stack everything into one giant tensor (N x Dim)
         # Move to GPU immediately for speed
-        device = self.embedding_extractor.device
-        self.index_embeddings = torch.stack(self.global_embeddings).to(device)
-        self.index_labels = torch.tensor(self.global_labels).to(device)
+        self.index_embeddings = torch.stack(self.global_embeddings).to(self.device)
+        self.index_labels = torch.tensor(self.global_labels).to(self.device)
 
         # 2. Normalize vectors (Required for Cosine Similarity)
         self.index_embeddings = torch.nn.functional.normalize(self.index_embeddings, p=2, dim=1)
@@ -202,6 +218,40 @@ class FENClassifier:
         self.knn_similarity_threshold = min(calc_threshold, self.knn_similarity_threshold)
 
         print(f"Global OOD Threshold (Average-Based) set to: {self.knn_similarity_threshold:.4f} calc_threshold:{calc_threshold:.4f}")
+
+    def save(self, path: str):
+        """Save GLOBAL classifier to disk"""
+        print(f"Saving global classifier with {len(self.global_embeddings)} embeddings...")
+        torch.save({
+            'global_embeddings': self.global_embeddings,
+            'global_labels': self.global_labels,
+            'knn_similarity_threshold': self.knn_similarity_threshold
+        }, path)
+        print("Saved successfully.")
+
+    def load(self, path: str):
+        """Load GLOBAL classifier from disk"""
+        print(f"Loading classifier from {path}...")
+        if not os.path.exists(path):
+            print("Warning: Checkpoint not found. Database will be empty.")
+            return
+
+        data = torch.load(path)
+
+        # Check if this is an old format file (migration check)
+        if 'tile_database' in data:
+            print("[WARNING] This is an OLD format file (Per-Tile). Ignoring it.")
+            print("Please uncomment Step 4 in test_classifier.py to rebuild the database.")
+            return
+
+        self.global_embeddings = data['global_embeddings']
+        self.global_labels = data['global_labels']
+
+        # Restore threshold if it exists, otherwise keep default
+        if 'knn_similarity_threshold' in data:
+            self.knn_similarity_threshold = data['knn_similarity_threshold']
+
+        print(f"Loaded {len(self.global_embeddings)} global embeddings.")
     
     # ============ METHOD 1: KNN ============
     def predict_knn(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray]:
@@ -403,61 +453,6 @@ class FENClassifier:
 
     # ============ METHOD 3: OOD Detection (Per-tile, Distance-based) ============
 
-    def predict_with_ood(self, tile_embeddings: torch.Tensor,
-                         method: str = "knn",  # Default to knn for global
-                         k: int = 5,
-                         threshold: float = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-
-        # Check GLOBAL index, not per-tile index
-        if self.index_embeddings is None:
-            raise ValueError("Must call build_index() first")
-
-        if method == "knn":
-            return self._predict_ood_knn(tile_embeddings)
-        elif method == "mahalanobis":
-            # Mahalanobis is harder to implement globally; sticking to KNN is recommended
-            print("Warning: Global Mahalanobis not implemented. Falling back to KNN.")
-            return self._predict_ood_knn(tile_embeddings)
-        else:
-            raise ValueError(f"Unknown method: {method}")
-    
-
-
-
-
-    def save(self, path: str):
-        """Save GLOBAL classifier to disk"""
-        print(f"Saving global classifier with {len(self.global_embeddings)} embeddings...")
-        torch.save({
-            'global_embeddings': self.global_embeddings,
-            'global_labels': self.global_labels,
-            'knn_similarity_threshold': self.knn_similarity_threshold
-        }, path)
-        print("Saved successfully.")
-
-    def load(self, path: str):
-        """Load GLOBAL classifier from disk"""
-        print(f"Loading classifier from {path}...")
-        if not os.path.exists(path):
-            print("Warning: Checkpoint not found. Database will be empty.")
-            return
-
-        data = torch.load(path)
-
-        # Check if this is an old format file (migration check)
-        if 'tile_database' in data:
-            print("[WARNING] This is an OLD format file (Per-Tile). Ignoring it.")
-            print("Please uncomment Step 4 in test_classifier.py to rebuild the database.")
-            return
-
-        self.global_embeddings = data['global_embeddings']
-        self.global_labels = data['global_labels']
-
-        # Restore threshold if it exists, otherwise keep default
-        if 'knn_similarity_threshold' in data:
-            self.knn_similarity_threshold = data['knn_similarity_threshold']
-
-        print(f"Loaded {len(self.global_embeddings)} global embeddings.")
 
 
 # Example usage:
