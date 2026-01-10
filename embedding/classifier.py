@@ -54,7 +54,8 @@ class FENClassifier:
         self.index_labels = None  # Tensor [Total_Samples]
 
         # OOD Threshold (One single value for the whole board)
-        self.global_threshold = 0.70
+        self.knn_similarity_threshold = 0.70
+        self.knn_k= self.validate_k_value(5)
 
         # Embedding extractor setup (Keep as is)
         self.embedding_extractor = embedding_extractor
@@ -181,7 +182,7 @@ class FENClassifier:
         # Since we are matching the database against itself, the "Best" match is always ITSELF (score 1.0).
         # We want the *next* k matches.
         # So we ask for k+1, and throw away the first column.
-        k_calib = 5  # Must match the k used in prediction!
+        k_calib = self.knn_k  # Must match the k used in prediction!
 
         # Get top k+1 scores
         top_k_vals, _ = torch.topk(sim_matrix, k=k_calib + 1, dim=1)
@@ -198,12 +199,12 @@ class FENClassifier:
 
         # Update safety ceiling (Average is usually lower, so we lower the ceiling too)
         # 0.55 is a good ceiling for "Average DINOv2" (Max was 0.60)
-        self.global_threshold = min(calc_threshold, 0.55)
+        self.knn_similarity_threshold = min(calc_threshold, 0.60)
 
-        print(f"Global OOD Threshold (Average-Based) set to: {self.global_threshold:.4f}")
+        print(f"Global OOD Threshold (Average-Based) set to: {self.knn_similarity_threshold:.4f} calc_threshold:{calc_threshold:.4f}")
     
     # ============ METHOD 1: KNN ============
-    def predict_knn(self, tile_embeddings: torch.Tensor, k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+    def predict_knn(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray]:
         if self.index_embeddings is None:
             raise ValueError("Call build_index() first")
 
@@ -218,7 +219,7 @@ class FENClassifier:
         sim_matrix = torch.mm(query, self.index_embeddings.t())
 
         # 3. Find Top K matches
-        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=k, dim=1)
+        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=self.knn_k, dim=1)
 
         predictions = np.zeros(64, dtype=int)
         confidences = np.zeros(64, dtype=float)
@@ -241,17 +242,17 @@ class FENClassifier:
     
     def validate_k_value(self, k: int, n: int) -> int:
         """Ensure k is not larger than number of stored embeddings
-        
+
         Args:
             k: Requested k value
             n: Number of training samples available
-        
+
         Uses adaptive k based on dataset size if k is None.
         Research (Dasgupta et al.) recommends k ~ sqrt(n) for balanced accuracy.
         """
         if n == 0:
             return 1
-        
+
         # If k is None or 0, use adaptive k = sqrt(n)
         if k is None or k == 0:
             k = max(3, int(np.sqrt(n)))
@@ -487,7 +488,7 @@ class FENClassifier:
         tile_embeddings = tile_embeddings.to(device)
 
         # Use the auto-calculated threshold if none provided
-        current_threshold = threshold if threshold is not None else self.global_threshold
+        current_threshold = threshold if threshold is not None else self.knn_similarity_threshold
 
         query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
         sim_matrix = torch.mm(query, self.index_embeddings.t())
@@ -542,7 +543,7 @@ class FENClassifier:
         torch.save({
             'global_embeddings': self.global_embeddings,
             'global_labels': self.global_labels,
-            'global_threshold': self.global_threshold
+            'knn_similarity_threshold': self.knn_similarity_threshold
         }, path)
         print("Saved successfully.")
 
@@ -565,8 +566,8 @@ class FENClassifier:
         self.global_labels = data['global_labels']
 
         # Restore threshold if it exists, otherwise keep default
-        if 'global_threshold' in data:
-            self.global_threshold = data['global_threshold']
+        if 'knn_similarity_threshold' in data:
+            self.knn_similarity_threshold = data['knn_similarity_threshold']
 
         print(f"Loaded {len(self.global_embeddings)} global embeddings.")
 
