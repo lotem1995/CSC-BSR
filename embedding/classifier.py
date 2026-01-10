@@ -586,7 +586,7 @@ class FENClassifier:
             
             predictions[tile_idx] = predicted_label
             confidences[tile_idx] = top_k_scores.mean().item()
-            is_ood[tile_idx] = max_similarity < current_threshold  # Low similarity = OOD
+            is_ood[tile_idx] = top_k_scores.mean().item() < current_threshold  # Low similarity = OOD
 
         return predictions, confidences, is_ood
     
