@@ -383,10 +383,14 @@ def main():
             board_state=board_state
         )
 
-    classifier.load(str(classifier_path))
-    
-    # Step 5: Build index
-    print(f"\n5. Building KNN/Mahalanobis indices...")
+    # 1. Save the data you just built (so you can use it next time)
+    classifier.save(str(classifier_path))
+
+    # 2. DO NOT LOAD HERE! (This was wiping your data)
+    # classifier.load(str(classifier_path))  <--- COMMENT THIS OUT
+
+    # Step 5: Build index (uses the data currently in memory)
+    print(f"\n5. Building KNN indices...")
     classifier.build_index()
     
     # Step 6: Evaluate on test set

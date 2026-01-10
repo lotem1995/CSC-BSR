@@ -422,35 +422,20 @@ class FENClassifier:
         self.tile_ood_thresholds[tile_idx][method] = threshold
         return threshold
 
-    def predict_with_ood(self, tile_embeddings: torch.Tensor, 
-                         method: str = "mahalanobis",
-                         k: int = 3,
+    def predict_with_ood(self, tile_embeddings: torch.Tensor,
+                         method: str = "knn",  # Default to knn for global
+                         k: int = 5,
                          threshold: float = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Predict class for each of 64 tiles with Out-of-Distribution detection.
-        Uses distance-based OOD scoring (Mahalanobis min distance or KNN distance).
-        
-        Args:
-            tile_embeddings: Tensor of shape [64, embedding_dim]
-            method: "mahalanobis" or "knn" for OOD scoring
-            k: Number of neighbors (for KNN method)
-            threshold: Distance threshold for OOD detection. If None, uses adaptive threshold:
-                      - Mahalanobis: threshold = 3.0 (chi-squared approximation)
-                      - KNN: threshold = 0.7 (cosine similarity)
-            
-        Returns:
-            (predictions, confidences, is_ood)
-                predictions: np.ndarray [64] with predicted class
-                confidences: np.ndarray [64] with confidence (0-1)
-                is_ood: np.ndarray [64] with bool, True = uncertain/unknown
-        """
-        if method == "mahalanobis":
-            if len(self.tile_mahal_inv_covs) == 0:
-                raise ValueError("Must call build_index() first")
-            return self._predict_ood_mahalanobis(tile_embeddings, threshold)
-        elif method == "knn":
-            if len(self.tile_embeddings_index) == 0:
-                raise ValueError("Must call build_index() first")
+
+        # Check GLOBAL index, not per-tile index
+        if self.index_embeddings is None:
+            raise ValueError("Must call build_index() first")
+
+        if method == "knn":
+            return self._predict_ood_knn(tile_embeddings, k, threshold)
+        elif method == "mahalanobis":
+            # Mahalanobis is harder to implement globally; sticking to KNN is recommended
+            print("Warning: Global Mahalanobis not implemented. Falling back to KNN.")
             return self._predict_ood_knn(tile_embeddings, k, threshold)
         else:
             raise ValueError(f"Unknown method: {method}")
