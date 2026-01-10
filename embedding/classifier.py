@@ -23,6 +23,8 @@ import os
 from PIL import Image
 import sys
 
+from sqlalchemy import false
+
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 from preprocessing.splitting_images import slice_image_with_coordinates
 
@@ -46,6 +48,8 @@ class FENClassifier:
 
     def __init__(self, embedding_extractor: Optional[EmbeddingModel] = None):
         # GLOBAL Storage (No more per-tile dictionaries)
+
+
         self.global_embeddings = []  # Will hold tens of thousands of vectors
         self.global_labels = []  # Will hold the class label for each vector
 
@@ -54,16 +58,19 @@ class FENClassifier:
         self.index_labels = None  # Tensor [Total_Samples]
 
         # OOD Threshold (One single value for the whole board)
-        self.knn_similarity_threshold = 0.70
         self.knn_k = 5
+
+        self.knn_similarity_threshold = 0.60
+
+        self.knn_ood_using_similarity = False
+
+        self.knn_MIN_CONSENSUS = 0.7
+        self.knn_ood_using_vote = True
 
         # Embedding extractor setup (Keep as is)
         self.embedding_extractor = embedding_extractor
-        if self.embedding_extractor is None:
-            print("Initializing default QwenVisionEmbedding...")
-            self.embedding_extractor = QwenVisionEmbedding()
-
         self.embedding_dim = self.embedding_extractor.get_embedding_dim()
+
         print(f"Using {self.embedding_extractor} for GLOBAL FEN classification")
 
         
@@ -198,8 +205,7 @@ class FENClassifier:
         calc_threshold = float(np.percentile(avg_scores.cpu().numpy(), 1))
 
         # Update safety ceiling (Average is usually lower, so we lower the ceiling too)
-        # 0.55 is a good ceiling for "Average DINOv2" (Max was 0.60)
-        self.knn_similarity_threshold = min(calc_threshold, 0.60)
+        self.knn_similarity_threshold = min(calc_threshold, self.knn_similarity_threshold)
 
         print(f"Global OOD Threshold (Average-Based) set to: {self.knn_similarity_threshold:.4f} calc_threshold:{calc_threshold:.4f}")
     
@@ -239,38 +245,75 @@ class FENClassifier:
             confidences[i] = top_k_scores[i, 0].item()
 
         return predictions, confidences
-    
-    def validate_k_value(self, k: int, n: int) -> int:
-        """Ensure k is not larger than number of stored embeddings
 
-        Args:
-            k: Requested k value
-            n: Number of training samples available
+    def _predict_ood_knn(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-        Uses adaptive k based on dataset size if k is None.
-        Research (Dasgupta et al.) recommends k ~ sqrt(n) for balanced accuracy.
-        """
-        if n == 0:
-            return 1
+        if self.index_embeddings is None:
+            raise ValueError("Call build_index() first")
 
-        # If k is None or 0, use adaptive k = sqrt(n)
-        if k is None or k == 0:
-            k = max(3, int(np.sqrt(n)))
-        
-        # Cap k to dataset size
-        return max(1, min(n, k))
-    
+        # FIX: Ensure the input is on the same device as the database (GPU)
+        device = self.index_embeddings.device
+        tile_embeddings = tile_embeddings.to(device)
+
+        # Use the auto-calculated threshold if none provided
+        current_threshold = self.knn_similarity_threshold
+
+        query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
+        sim_matrix = torch.mm(query, self.index_embeddings.t())
+        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=self.knn_k, dim=1)
+
+        predictions = np.zeros(64, dtype=int)
+        confidences = np.zeros(64, dtype=float)
+        is_ood = np.zeros(64, dtype=bool)
+
+        # New: Define Consensus Threshold (e.g., 4 out of 5 must agree)
+        # 0.6 = 3/5, 0.8 = 4/5, 1.0 = 5/5
+        MIN_CONSENSUS = self.knn_MIN_CONSENSUS
+
+        for i in range(64):
+            indices = top_k_indices[i].cpu().tolist()
+            neighbor_labels = self.index_labels[indices].tolist()
+
+            # Count votes
+            # e.g., neighbor_labels = [0, 0, 0, 1, 2] -> {0: 3, 1: 1, 2: 1}
+            from collections import Counter
+            vote_counts = Counter(neighbor_labels)
+
+            # Get winner
+            predicted_label, best_vote_count = vote_counts.most_common(1)[0]
+
+            # Calculate Consensus Ratio (e.g., 3/5 = 0.6)
+            consensus_ratio = best_vote_count / self.knn_k
+
+            max_similarity = top_k_scores[i, 0].item()
+            avg_similarity = top_k_scores[i].mean().item()
+
+            predictions[i] = predicted_label
+            confidences[i] = max_similarity
+
+            # === HYBRID OOD CHECK ===
+            # 1. Distance Check: Must be similar enough (Your current check)
+            is_distant = avg_similarity < current_threshold
+
+            # 2. Ambiguity Check: Neighbors must agree (The new check)
+            is_ambiguous = consensus_ratio < MIN_CONSENSUS
+
+            # Flag as OOD if EITHER is true
+            is_ood[i] = (self.knn_ood_using_similarity and is_distant) or (self.knn_ood_using_vote and is_ambiguous)
+
+        return predictions, confidences, is_ood
+
     # ============ METHOD 2: Mahalanobis Distance (Class-Conditional) ============
     def predict_mahalanobis(self, tile_embeddings: torch.Tensor, k: int = None) -> Tuple[np.ndarray, np.ndarray]:
         """
         Predict class for each of 64 tiles using class-conditional Mahalanobis distance.
         Computes distance to each class mean: d_c(x) = (x - μ_c)^T Σ^-1 (x - μ_c)
         Predicts argmin over classes.
-        
+
         Args:
             tile_embeddings: Tensor of shape [64, embedding_dim]
             k: Unused (kept for API compatibility). Mahalanobis uses class means, not k-NN.
-            
+
         Returns:
             (predictions, confidences)
                 predictions: np.ndarray [64] with predicted class (0-16) for each tile
@@ -278,75 +321,47 @@ class FENClassifier:
         """
         if len(self.tile_mahal_inv_covs) == 0:
             raise ValueError("Must call build_index() first")
-        
+
         predictions = np.zeros(64, dtype=int)
         confidences = np.zeros(64, dtype=float)
-        
+
         for tile_idx in range(64):
             if tile_idx not in self.tile_mahal_inv_covs:
                 # No training data for this tile
                 predictions[tile_idx] = 0
                 confidences[tile_idx] = 0.0
                 continue
-            
+
             # Get query embedding for this tile
             query_emb = tile_embeddings[tile_idx].unsqueeze(0)
             query_np = query_emb.cpu().numpy()
-            
+
             # Get class statistics for this tile
             scaler = self.tile_scalers[tile_idx]
             inv_cov = self.tile_mahal_inv_covs[tile_idx]
             class_means = self.tile_class_means[tile_idx]
-            
+
             # Scale query
             query_scaled = scaler.transform(query_np)[0]
-            
+
             # Compute Mahalanobis distance to each class mean
             class_distances = {}
             for class_label, class_mean in class_means.items():
                 diff = query_scaled - class_mean
                 mahal_dist = np.sqrt(diff @ inv_cov @ diff.T)
                 class_distances[class_label] = mahal_dist
-            
+
             # Predict class with minimum distance
             predicted_label = min(class_distances, key=class_distances.get)
             min_distance = class_distances[predicted_label]
-            
+
             predictions[tile_idx] = predicted_label
-            
+
             # Confidence: exponential decay of distance (clean, calibratable)
             confidences[tile_idx] = np.exp(-min_distance)
-        
+
         return predictions, confidences
-    
-    def predict_from_image(self, board_image: Image.Image, method: str = "knn", 
-                          k: int = 3) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Predict class for all 64 tiles from a board image.
-        
-        Args:
-            board_image: PIL Image of full chess board
-            method: "knn" or "mahalanobis" or inner classifier
-            k: Number of neighbors (used only for KNN)
-            
-        Returns:
-            (predictions, confidences)
-                predictions: np.ndarray [64] with predicted class (0-16) for each tile
-                confidences: np.ndarray [64] with per-tile confidence
-        """
-        tile_embeddings = self.extract_board_embeddings(board_image)
-        
-        if method == "knn":
-            return self.predict_knn(tile_embeddings, k)
-        elif method == "mahalanobis":
-            return self.predict_mahalanobis(tile_embeddings)
-        ## TODO: Add inner classifier support
-        # elif method=="inner":
-        #     return self.embedding_extractor.classify_fen(board_image):
-        else:
-            raise ValueError(f"Unknown method: {method}")
-    
-    # ============ METHOD 3: OOD Detection (Per-tile, Distance-based) ============
+
     def _calc_mahal_threshold(self, tile_idx: int) -> float:
         # 1. Verification: Does data exist?
         if tile_idx not in self.tile_database:
@@ -391,25 +406,8 @@ class FENClassifier:
 
         return calc_threshold
 
-    def _get_or_calculate_threshold(self, tile_idx: int, method: str, k: int = 3) -> float:
-        # Check cache: Do we have it?
-        if tile_idx in self.tile_ood_thresholds:
-            if method in self.tile_ood_thresholds[tile_idx]:
-                return self.tile_ood_thresholds[tile_idx][method]
-        else:
-            self.tile_ood_thresholds[tile_idx] = {}
 
-        # Calculate if missing
-        if method == "mahalanobis":
-            threshold = self._calc_mahal_threshold(tile_idx)
-        elif method == "knn":
-            threshold = self._calc_knn_threshold(tile_idx, k)
-        else:
-            raise ValueError(f"Unknown threshold method: {method}")
-
-        # Save to cache and return
-        self.tile_ood_thresholds[tile_idx][method] = threshold
-        return threshold
+    # ============ METHOD 3: OOD Detection (Per-tile, Distance-based) ============
 
     def predict_with_ood(self, tile_embeddings: torch.Tensor,
                          method: str = "knn",  # Default to knn for global
@@ -421,119 +419,15 @@ class FENClassifier:
             raise ValueError("Must call build_index() first")
 
         if method == "knn":
-            return self._predict_ood_knn(tile_embeddings, k, threshold)
+            return self._predict_ood_knn(tile_embeddings)
         elif method == "mahalanobis":
             # Mahalanobis is harder to implement globally; sticking to KNN is recommended
             print("Warning: Global Mahalanobis not implemented. Falling back to KNN.")
-            return self._predict_ood_knn(tile_embeddings, k, threshold)
+            return self._predict_ood_knn(tile_embeddings)
         else:
             raise ValueError(f"Unknown method: {method}")
     
-    def _predict_ood_mahalanobis(self, tile_embeddings: torch.Tensor, 
-                                  threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """OOD detection using Mahalanobis min distance."""
-        predictions = np.zeros(64, dtype=int)
-        confidences = np.zeros(64, dtype=float)
-        is_ood = np.zeros(64, dtype=bool)
-        
-        for tile_idx in range(64):
-            if tile_idx not in self.tile_mahal_inv_covs:
-                predictions[tile_idx] = 0
-                confidences[tile_idx] = 0.0
-                is_ood[tile_idx] = True
-                continue
 
-            current_threshold = threshold
-            if current_threshold is None:
-                # Calculate or fetch cached threshold automatically
-                current_threshold = self._get_or_calculate_threshold(tile_idx, "mahalanobis")
-            
-            # Get query embedding
-            query_emb = tile_embeddings[tile_idx].unsqueeze(0)
-            query_np = query_emb.cpu().numpy()
-            
-            # Get class statistics
-            scaler = self.tile_scalers[tile_idx]
-            inv_cov = self.tile_mahal_inv_covs[tile_idx]
-            class_means = self.tile_class_means[tile_idx]
-            
-            # Scale query
-            query_scaled = scaler.transform(query_np)[0]
-            
-            # Compute distances to all class means
-            class_distances = {}
-            for class_label, class_mean in class_means.items():
-                diff = query_scaled - class_mean
-                mahal_dist = np.sqrt(diff @ inv_cov @ diff.T)
-                class_distances[class_label] = mahal_dist
-            
-            # Get prediction and min distance
-            predicted_label = min(class_distances, key=class_distances.get)
-            min_distance = class_distances[predicted_label]
-            
-            predictions[tile_idx] = predicted_label
-            confidences[tile_idx] = np.exp(-min_distance)
-            is_ood[tile_idx] = min_distance > current_threshold
-        
-        return predictions, confidences, is_ood
-
-    def _predict_ood_knn(self, tile_embeddings: torch.Tensor, k: int,
-                         threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-
-        if self.index_embeddings is None:
-            raise ValueError("Call build_index() first")
-
-        # FIX: Ensure the input is on the same device as the database (GPU)
-        device = self.index_embeddings.device
-        tile_embeddings = tile_embeddings.to(device)
-
-        # Use the auto-calculated threshold if none provided
-        current_threshold = threshold if threshold is not None else self.knn_similarity_threshold
-
-        query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
-        sim_matrix = torch.mm(query, self.index_embeddings.t())
-        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=k, dim=1)
-
-        predictions = np.zeros(64, dtype=int)
-        confidences = np.zeros(64, dtype=float)
-        is_ood = np.zeros(64, dtype=bool)
-
-        # New: Define Consensus Threshold (e.g., 4 out of 5 must agree)
-        # 0.6 = 3/5, 0.8 = 4/5, 1.0 = 5/5
-        MIN_CONSENSUS = 0.7
-
-        for i in range(64):
-            indices = top_k_indices[i].cpu().tolist()
-            neighbor_labels = self.index_labels[indices].tolist()
-
-            # Count votes
-            # e.g., neighbor_labels = [0, 0, 0, 1, 2] -> {0: 3, 1: 1, 2: 1}
-            from collections import Counter
-            vote_counts = Counter(neighbor_labels)
-
-            # Get winner
-            predicted_label, best_vote_count = vote_counts.most_common(1)[0]
-
-            # Calculate Consensus Ratio (e.g., 3/5 = 0.6)
-            consensus_ratio = best_vote_count / k
-
-            max_similarity = top_k_scores[i, 0].item()
-            avg_similarity = top_k_scores[i].mean().item()
-
-            predictions[i] = predicted_label
-            confidences[i] = max_similarity
-
-            # === HYBRID OOD CHECK ===
-            # 1. Distance Check: Must be similar enough (Your current check)
-            is_distant = avg_similarity < current_threshold
-
-            # 2. Ambiguity Check: Neighbors must agree (The new check)
-            is_ambiguous = consensus_ratio < MIN_CONSENSUS
-
-            # Flag as OOD if EITHER is true
-            is_ood[i] = is_distant # or is_ambiguous
-
-        return predictions, confidences, is_ood
 
 
 
