@@ -177,17 +177,30 @@ class FENClassifier:
         # All-vs-All comparison
         sim_matrix = torch.mm(sample_embs, sample_embs.t())
 
-        # Find 1st Nearest Neighbor score (excluding self)
-        # We set diagonal to -1 so we don't match with ourselves
-        sim_matrix.fill_diagonal_(-1.0)
-        max_scores, _ = sim_matrix.max(dim=1)
+        # We need to find neighbors.
+        # Since we are matching the database against itself, the "Best" match is always ITSELF (score 1.0).
+        # We want the *next* k matches.
+        # So we ask for k+1, and throw away the first column.
+        k_calib = 5  # Must match the k used in prediction!
 
-        # Use 1st Percentile (reject the worst 1% of valid data)
-        calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 0.1))
+        # Get top k+1 scores
+        top_k_vals, _ = torch.topk(sim_matrix, k=k_calib + 1, dim=1)
 
-        # Apply Safety Ceiling (0.75 is usually good for global DINOv2)
-        self.global_threshold = min(calc_threshold, 0.60)
-        print(f"Global OOD Threshold set to: {self.global_threshold:.4f}, calc_threshold:{calc_threshold:.4f}")
+        # Remove the first column (the self-match of 1.0)
+        neighbor_scores = top_k_vals[:, 1:]
+
+        # Calculate the AVERAGE score for every sample
+        avg_scores = neighbor_scores.mean(dim=1)
+
+        # Now set the threshold based on these AVERAGES
+        # Note: We stick to percentile 1 (not 0.1) for stability
+        calc_threshold = float(np.percentile(avg_scores.cpu().numpy(), 1))
+
+        # Update safety ceiling (Average is usually lower, so we lower the ceiling too)
+        # 0.55 is a good ceiling for "Average DINOv2" (Max was 0.60)
+        self.global_threshold = min(calc_threshold, 0.55)
+
+        print(f"Global OOD Threshold (Average-Based) set to: {self.global_threshold:.4f}")
     
     # ============ METHOD 1: KNN ============
     def predict_knn(self, tile_embeddings: torch.Tensor, k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
