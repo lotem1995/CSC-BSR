@@ -43,35 +43,28 @@ class FENClassifier:
     
     Works with any embedding model that implements the EmbeddingModel interface.
     """
-    
+
     def __init__(self, embedding_extractor: Optional[EmbeddingModel] = None):
-        """
-        Args:
-            embedding_extractor: Any EmbeddingModel instance (QwenVisionEmbedding, DINOv2Embedding, etc).
-                               If None, creates default QwenVisionEmbedding.
-        """
-        # Per-tile storage: tile_idx -> list of {embedding, label}
-        self.tile_database = {}  # int (0-63) -> list of {embedding: Tensor, label: int}
-        
-        # Per-tile indices for KNN: tile_idx -> {embeddings: Tensor, labels: List[int]}
-        self.tile_embeddings_index = {}  # int -> Tensor [n_samples, embedding_dim]
-        self.tile_labels_index = {}      # int -> List[int]
-        
-        # Per-tile Mahalanobis: tile_idx -> {scaler, inv_cov, class_means}
-        self.tile_scalers = {}  # int -> StandardScaler
-        self.tile_mahal_inv_covs = {}  # int -> ndarray [embedding_dim, embedding_dim]
-        self.tile_class_means = {}  # int -> dict mapping class_label -> mean embedding
-        self.tile_ood_thresholds = {} # Format: { tile_idx: { 'knn': float, 'mahalanobis': float } }
-        
-        # Embedding extractor (must implement EmbeddingModel interface)
+        # GLOBAL Storage (No more per-tile dictionaries)
+        self.global_embeddings = []  # Will hold tens of thousands of vectors
+        self.global_labels = []  # Will hold the class label for each vector
+
+        # The searchable Index (Built later)
+        self.index_embeddings = None  # Tensor [Total_Samples, Dim]
+        self.index_labels = None  # Tensor [Total_Samples]
+
+        # OOD Threshold (One single value for the whole board)
+        self.global_threshold = 0.70
+
+        # Embedding extractor setup (Keep as is)
         self.embedding_extractor = embedding_extractor
         if self.embedding_extractor is None:
             print("Initializing default QwenVisionEmbedding...")
             self.embedding_extractor = QwenVisionEmbedding()
-        
-        # Store embedding dimension for reference
+
         self.embedding_dim = self.embedding_extractor.get_embedding_dim()
-        print(f"Using {self.embedding_extractor} for per-tile FEN classification")
+        print(f"Using {self.embedding_extractor} for GLOBAL FEN classification")
+
         
     def extract_board_embeddings(self, board_image: Image.Image) -> torch.Tensor:
         """
@@ -127,32 +120,19 @@ class FENClassifier:
         os.unlink(tmp_board_path)
         
         return tile_embeddings
-    
+
     def add_fen_position(self, fen: str, tile_embeddings: torch.Tensor, board_state: Optional[np.ndarray] = None):
-        """
-        Add a FEN position and its 64 tile embeddings to per-tile database.
-        
-        Args:
-            fen: FEN string (e.g., "rnbqkbnr/pppppppp/...")
-            tile_embeddings: Tensor of shape [64, embedding_dim]
-            board_state: Optional [8, 8] array with class labels (0-16) for each square.
-                        If None, assumes all zeros (empty squares).
-        """
         if board_state is None:
             board_state = np.zeros((8, 8), dtype=int)
-        
-        # Flatten board state to 1D (row-major order)
-        labels_1d = board_state.flatten()  # [64]
-        
-        # Store each tile separately in the database
+
+        labels_1d = board_state.flatten()
+
+        # Iterate over all 64 tiles in this new board
         for tile_idx in range(64):
-            if tile_idx not in self.tile_database:
-                self.tile_database[tile_idx] = []
-            
-            self.tile_database[tile_idx].append({
-                'embedding': tile_embeddings[tile_idx].float(),
-                'label': int(labels_1d[tile_idx]),
-            })
+            # ADD TO GLOBAL LIST
+            # We treat every tile identically, regardless of its position (A1 vs E4)
+            self.global_embeddings.append(tile_embeddings[tile_idx].float().cpu())
+            self.global_labels.append(int(labels_1d[tile_idx]))
     
     def add_fen_from_image(self, fen: str, board_image: Image.Image, board_state: Optional[np.ndarray] = None):
         """
@@ -165,100 +145,82 @@ class FENClassifier:
         """
         tile_embeddings = self.extract_board_embeddings(board_image)
         self.add_fen_position(fen, tile_embeddings, board_state)
-        
+
     def build_index(self):
-        """
-        Build per-tile KNN and Mahalanobis indices from the tile database.
-        Must be called after adding FEN positions and before prediction.
-        """
-        self.tile_ood_thresholds = {}  # Reset cache because data changed
-        for tile_idx in range(64):
-            if tile_idx not in self.tile_database or len(self.tile_database[tile_idx]) == 0:
-                continue
-            
-            # Extract embeddings and labels for this tile
-            tile_data = self.tile_database[tile_idx]
-            embeddings = torch.stack([item['embedding'] for item in tile_data])
-            labels = [item['label'] for item in tile_data]
-            
-            # Normalize embeddings for KNN
-            embeddings_norm = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-            self.tile_embeddings_index[tile_idx] = embeddings_norm
-            self.tile_labels_index[tile_idx] = labels
-            
-            # Fit Mahalanobis: compute class means and shared covariance
-            embeddings_np = embeddings.cpu().numpy()
-            scaler = StandardScaler()
-            scaler.fit(embeddings_np)
-            
-            # Compute scaled embeddings and shared covariance
-            scaled = scaler.transform(embeddings_np)
-            lw = LedoitWolf()
-            lw.fit(scaled)
-            
-            # Compute per-class means in scaled space
-            class_means = {}
-            unique_labels = set(labels)
-            for class_label in unique_labels:
-                class_mask = np.array(labels) == class_label
-                class_embeddings = scaled[class_mask]
-                class_means[class_label] = class_embeddings.mean(axis=0)
-            
-            self.tile_scalers[tile_idx] = scaler
-            self.tile_mahal_inv_covs[tile_idx] = np.linalg.inv(lw.covariance_)
-            self.tile_class_means[tile_idx] = class_means
+        print(f"Building Global Index with {len(self.global_embeddings)} samples...")
+
+        if len(self.global_embeddings) == 0:
+            print("Warning: Database is empty!")
+            return
+
+        # 1. Stack everything into one giant tensor (N x Dim)
+        # Move to GPU immediately for speed
+        device = self.embedding_extractor.device
+        self.index_embeddings = torch.stack(self.global_embeddings).to(device)
+        self.index_labels = torch.tensor(self.global_labels).to(device)
+
+        # 2. Normalize vectors (Required for Cosine Similarity)
+        self.index_embeddings = torch.nn.functional.normalize(self.index_embeddings, p=2, dim=1)
+
+        print(f"Index built. Shape: {self.index_embeddings.shape}")
+
+        # 3. AUTO-CALIBRATE THRESHOLD (The Self-Check)
+        # We check how well the valid data matches itself.
+        print("Auto-calibrating global threshold...")
+
+        # To save memory/time, we take a random sample of 2000 images for calibration
+        n_samples = self.index_embeddings.shape[0]
+        sample_size = min(2000, n_samples)
+        indices = torch.randperm(n_samples)[:sample_size]
+        sample_embs = self.index_embeddings[indices]
+
+        # All-vs-All comparison
+        sim_matrix = torch.mm(sample_embs, sample_embs.t())
+
+        # Find 1st Nearest Neighbor score (excluding self)
+        # We set diagonal to -1 so we don't match with ourselves
+        sim_matrix.fill_diagonal_(-1.0)
+        max_scores, _ = sim_matrix.max(dim=1)
+
+        # Use 1st Percentile (reject the worst 1% of valid data)
+        calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 1))
+
+        # Apply Safety Ceiling (0.75 is usually good for global DINOv2)
+        self.global_threshold = min(calc_threshold, 0.75)
+        print(f"Global OOD Threshold set to: {self.global_threshold:.4f}")
     
     # ============ METHOD 1: KNN ============
-    def predict_knn(self, tile_embeddings: torch.Tensor, k: int = 3) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Predict class for each of 64 tiles using K-Nearest Neighbors.
-        
-        Args:
-            tile_embeddings: Tensor of shape [64, embedding_dim]
-            k: Number of neighbors to check
-            
-        Returns:
-            (predictions, confidences)
-                predictions: np.ndarray [64] with predicted class (0-16) for each tile
-                confidences: np.ndarray [64] with confidence (0-1) for each tile
-        """
-        if len(self.tile_embeddings_index) == 0:
-            raise ValueError("No tiles in database. Call add_fen_position() and build_index() first.")
-        
+    def predict_knn(self, tile_embeddings: torch.Tensor, k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
+        if self.index_embeddings is None:
+            raise ValueError("Call build_index() first")
+
+        # 1. Prepare Query (64 x Dim)
+        query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
+
+        # 2. Global Search: Compare 64 queries vs 5000+ database samples
+        # Result: [64 x N_Global] similarity matrix
+        sim_matrix = torch.mm(query, self.index_embeddings.t())
+
+        # 3. Find Top K matches
+        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=k, dim=1)
+
         predictions = np.zeros(64, dtype=int)
         confidences = np.zeros(64, dtype=float)
-        
-        for tile_idx in range(64):
-            if tile_idx not in self.tile_embeddings_index:
-                # No training data for this tile, predict empty
-                predictions[tile_idx] = 0
-                confidences[tile_idx] = 0.0
-                continue
-            
-            # Get query embedding for this tile
-            query_emb = tile_embeddings[tile_idx].unsqueeze(0)
-            query_emb = torch.nn.functional.normalize(query_emb, p=2, dim=1)
-            
-            # Get stored embeddings for this tile
-            stored_embs = self.tile_embeddings_index[tile_idx]  # Already normalized
-            labels = self.tile_labels_index[tile_idx]
-            
-            # Validate and adapt k value
-            k_actual = self.validate_k_value(k, len(stored_embs))
-            
-            # Cosine similarity to all stored embeddings
-            similarities = torch.nn.functional.cosine_similarity(query_emb, stored_embs, dim=1)
-            
-            # Get top-k matches
-            top_k_scores, top_k_indices = torch.topk(similarities, k=k_actual)
-            
-            # Most common label among top-k
-            top_k_labels = [labels[idx] for idx in top_k_indices.tolist()]
-            predicted_label = max(set(top_k_labels), key=top_k_labels.count)
-            
-            predictions[tile_idx] = predicted_label
-            confidences[tile_idx] = top_k_scores.mean().item()
-        
+
+        # 4. Vote
+        for i in range(64):
+            # Get indices of neighbors
+            indices = top_k_indices[i].cpu().tolist()
+            # Look up their labels
+            neighbor_labels = self.index_labels[indices].tolist()
+
+            # Majority Vote
+            predicted_label = max(set(neighbor_labels), key=neighbor_labels.count)
+
+            predictions[i] = predicted_label
+            # Confidence is the similarity score of the best match
+            confidences[i] = top_k_scores[i, 0].item()
+
         return predictions, confidences
     
     def validate_k_value(self, k: int, n: int) -> int:
@@ -540,53 +502,41 @@ class FENClassifier:
             is_ood[tile_idx] = min_distance > current_threshold
         
         return predictions, confidences, is_ood
-    
+
     def _predict_ood_knn(self, tile_embeddings: torch.Tensor, k: int,
                          threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """OOD detection using KNN distance to nearest neighbor."""
+
+        # Reuse the logic from predict_knn
+        if self.index_embeddings is None:
+            raise ValueError("Call build_index() first")
+
+        # Use the auto-calculated threshold if none provided
+        current_threshold = threshold if threshold is not None else self.global_threshold
+
+        query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
+        sim_matrix = torch.mm(query, self.index_embeddings.t())
+        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=k, dim=1)
+
         predictions = np.zeros(64, dtype=int)
         confidences = np.zeros(64, dtype=float)
         is_ood = np.zeros(64, dtype=bool)
-        
-        for tile_idx in range(64):
-            if tile_idx not in self.tile_embeddings_index:
-                predictions[tile_idx] = 0
-                confidences[tile_idx] = 0.0
-                is_ood[tile_idx] = True
-                continue
 
-            current_threshold = threshold
-            if current_threshold is None:
-                current_threshold = self._get_or_calculate_threshold(tile_idx, "knn", k)
-            
-            # Get query embedding (normalized)
-            query_emb = tile_embeddings[tile_idx].unsqueeze(0)
-            query_emb = torch.nn.functional.normalize(query_emb, p=2, dim=1)
-            
-            # Get stored embeddings
-            stored_embs = self.tile_embeddings_index[tile_idx]
-            labels = self.tile_labels_index[tile_idx]
-            
-            # Validate k
-            k_actual = self.validate_k_value(k, len(stored_embs))
-            
-            # Compute cosine similarities
-            similarities = torch.nn.functional.cosine_similarity(query_emb, stored_embs, dim=1)
-            print(similarities)
-            
-            # Get top-k matches
-            top_k_scores, top_k_indices = torch.topk(similarities, k=k_actual)
-            
-            # Prediction: majority vote
-            top_k_labels = [labels[idx] for idx in top_k_indices.tolist()]
-            predicted_label = max(set(top_k_labels), key=top_k_labels.count)
-            
-            # OOD: max similarity (nearest neighbor distance)
-            max_similarity = top_k_scores[0].item()
-            
-            predictions[tile_idx] = predicted_label
-            confidences[tile_idx] = top_k_scores.mean().item()
-            is_ood[tile_idx] = top_k_scores.mean().item() < current_threshold  # Low similarity = OOD
+        for i in range(64):
+            indices = top_k_indices[i].cpu().tolist()
+            neighbor_labels = self.index_labels[indices].tolist()
+
+            predicted_label = max(set(neighbor_labels), key=neighbor_labels.count)
+            max_similarity = top_k_scores[i, 0].item()
+
+            predictions[i] = predicted_label
+            confidences[i] = max_similarity
+
+            # Global Check: Is the best match good enough?
+            is_ood[i] = max_similarity < current_threshold
+
+            # DEBUG PRINT
+            if i == 0 and is_ood[i]:
+                print(f"[OOD] Tile 0 Score: {max_similarity:.4f} < Threshold {current_threshold:.4f}")
 
         return predictions, confidences, is_ood
     
