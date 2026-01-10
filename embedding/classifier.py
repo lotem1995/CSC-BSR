@@ -186,8 +186,8 @@ class FENClassifier:
         calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 1))
 
         # Apply Safety Ceiling (0.75 is usually good for global DINOv2)
-        self.global_threshold = min(calc_threshold, 0.75)
-        print(f"Global OOD Threshold set to: {self.global_threshold:.4f}")
+        self.global_threshold = min(calc_threshold, 0.65)
+        print(f"Global OOD Threshold set to: {self.global_threshold:.4f}, calc_threshold:f{calc_threshold}")
     
     # ============ METHOD 1: KNN ============
     def predict_knn(self, tile_embeddings: torch.Tensor, k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
