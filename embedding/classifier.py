@@ -377,34 +377,6 @@ class FENClassifier:
 
         return calc_threshold
 
-    def _calc_knn_threshold(self, tile_idx: int, k: int) -> float:
-        # Get all stored embeddings
-        stored_embs = self.tile_embeddings_index[tile_idx]
-
-        # Compare every point to every other point (Self-Similarity Matrix)
-        sim_matrix = torch.mm(stored_embs, stored_embs.t())
-
-        # Find the score of the k-th nearest neighbor
-        # We need k+1 because the closest match is always itself (score 1.0)
-        k_adj = min(k + 1, len(stored_embs))
-        top_k_scores, _ = torch.topk(sim_matrix, k=k_adj, dim=1)
-
-        # The last column is the score of the neighbor we care about
-        ith_neighbor_scores = top_k_scores[:, -1].cpu().numpy()
-
-        if len(ith_neighbor_scores) == 0:
-            return 0.6  # Fallback default
-
-        # CHANGE 1: Use 1st percentile (More relaxed than 5th)
-        calc_threshold = float(np.percentile(ith_neighbor_scores, 1))
-
-        # CHANGE 2: Safety Ceiling (The Ultimate Fix)
-        # "Even if the validation data is perfect (0.98),
-        #  allow anything above 0.90 to pass."
-        final_threshold = min(calc_threshold, 0.30)
-
-        return final_threshold
-
     def _get_or_calculate_threshold(self, tile_idx: int, method: str, k: int = 3) -> float:
         # Check cache: Do we have it?
         if tile_idx in self.tile_ood_thresholds:
@@ -491,42 +463,6 @@ class FENClassifier:
         
         return predictions, confidences, is_ood
 
-    # def _predict_ood_knn(self, tile_embeddings: torch.Tensor, k: int,
-    #                      threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    #
-    #     if self.index_embeddings is None:
-    #         raise ValueError("Call build_index() first")
-    #
-    #     # FIX: Ensure the input is on the same device as the database (GPU)
-    #     device = self.index_embeddings.device
-    #     tile_embeddings = tile_embeddings.to(device)
-    #
-    #     # Use the auto-calculated threshold if none provided
-    #     current_threshold = threshold if threshold is not None else self.global_threshold
-    #
-    #     query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
-    #     sim_matrix = torch.mm(query, self.index_embeddings.t())
-    #     top_k_scores, top_k_indices = torch.topk(sim_matrix, k=k, dim=1)
-    #
-    #     predictions = np.zeros(64, dtype=int)
-    #     confidences = np.zeros(64, dtype=float)
-    #     is_ood = np.zeros(64, dtype=bool)
-    #
-    #     for i in range(64):
-    #         indices = top_k_indices[i].cpu().tolist()
-    #         neighbor_labels = self.index_labels[indices].tolist()
-    #
-    #         predicted_label = max(set(neighbor_labels), key=neighbor_labels.count)
-    #         max_similarity = top_k_scores[i, 0].item()
-    #
-    #         predictions[i] = predicted_label
-    #         confidences[i] = max_similarity
-    #
-    #         # Global Check: Is the best match good enough?
-    #         is_ood[i] = max_similarity < current_threshold
-    #
-    #     return predictions, confidences, is_ood
-
     def _predict_ood_knn(self, tile_embeddings: torch.Tensor, k: int,
                          threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
@@ -568,23 +504,20 @@ class FENClassifier:
             consensus_ratio = best_vote_count / k
 
             max_similarity = top_k_scores[i, 0].item()
+            avg_similarity = top_k_scores[i].mean().item()
 
             predictions[i] = predicted_label
             confidences[i] = max_similarity
 
             # === HYBRID OOD CHECK ===
             # 1. Distance Check: Must be similar enough (Your current check)
-            is_distant = max_similarity < current_threshold
+            is_distant = avg_similarity < current_threshold
 
             # 2. Ambiguity Check: Neighbors must agree (The new check)
             is_ambiguous = consensus_ratio < MIN_CONSENSUS
 
             # Flag as OOD if EITHER is true
-            is_ood[i] = is_ambiguous
-
-            # Debug Print
-            if is_ambiguous and not is_distant and i == 0:
-                print(f"[OOD] Tile 0 Ambiguous: {vote_counts} (Score: {max_similarity:.2f})")
+            is_ood[i] = is_distant # or is_ambiguous
 
         return predictions, confidences, is_ood
 
