@@ -225,7 +225,7 @@ class FENClassifier:
         calc_thresh_dist = float(np.percentile(kth_scores.cpu().numpy(), 1))
 
         # Safety floor for distance score (Adjust as needed, 1.0 is roughly dist=1.0)
-        self.knn_distance_threshold = max(calc_thresh_dist, self.knn_distance_threshold)
+        self.knn_distance_threshold = min(calc_thresh_dist, self.knn_distance_threshold)
         print(
             f"knn_distance_threshold set to: {self.knn_similarity_threshold:.4f} calc_thresh_dist:{calc_thresh_dist:.4f}")
 
