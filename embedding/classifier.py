@@ -369,35 +369,45 @@ class FENClassifier:
     
     # ============ METHOD 3: OOD Detection (Per-tile, Distance-based) ============
     def _calc_mahal_threshold(self, tile_idx: int) -> float:
-        # Get stats for this tile
+        # 1. Verification: Does data exist?
+        if tile_idx not in self.tile_database:
+            print(f"[DEBUG ERR] Tile {tile_idx} not in database!")
+            return 20.0  # Safer fallback
+
+        tile_data = self.tile_database[tile_idx]
+        if len(tile_data) == 0:
+            print(f"[DEBUG ERR] Tile {tile_idx} database entry is empty!")
+            return 20.0
+
+            # 2. Calculation
         scaler = self.tile_scalers[tile_idx]
         inv_cov = self.tile_mahal_inv_covs[tile_idx]
         class_means = self.tile_class_means[tile_idx]
 
-        # Get all training embeddings for this tile
-        tile_data = self.tile_database[tile_idx]
-        # Stack them into a tensor and convert to numpy
         raw_embs = torch.stack([item['embedding'] for item in tile_data]).cpu().numpy()
         labels = [item['label'] for item in tile_data]
 
-        # Calculate distance of every training point to its OWN class center
         scaled_embs = scaler.transform(raw_embs)
         distances = []
 
         for i, emb in enumerate(scaled_embs):
             label = labels[i]
             mean = class_means[label]
-            # Standard Mahalanobis distance math
             diff = emb - mean
             dist = np.sqrt(diff @ inv_cov @ diff.T)
             distances.append(dist)
 
         if not distances:
-            return 3.0  # Fallback default
+            print(f"[DEBUG ERR] Tile {tile_idx}: Loop finished but no distances calculated.")
+            return 20.0  # Increased fallback from 3.0 to 20.0 (realistic for DINO)
 
-        # Set threshold to cover 95% of known data (reject 5% outliers)
-        calculated_threshold = float(np.percentile(distances, 95))
-        final_threshold = max(calculated_threshold, 10.0)
+        # 3. Percentile Calculation
+        calc_threshold = float(np.percentile(distances, 95))
+
+        # 4. SAFETY FLOOR (Crucial for high dimensions)
+        # Prevent threshold from being impossibly low if validation data is too clean
+        final_threshold = max(calc_threshold, 15.0)
+
         return final_threshold
 
     def _calc_knn_threshold(self, tile_idx: int, k: int) -> float:
