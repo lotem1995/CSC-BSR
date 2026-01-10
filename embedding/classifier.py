@@ -55,7 +55,7 @@ class FENClassifier:
 
         # OOD Threshold (One single value for the whole board)
         self.knn_similarity_threshold = 0.70
-        self.knn_k= self.validate_k_value(5)
+        self.knn_k = 5
 
         # Embedding extractor setup (Keep as is)
         self.embedding_extractor = embedding_extractor
