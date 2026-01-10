@@ -436,7 +436,7 @@ class FENClassifier:
         # CHANGE 2: Safety Ceiling (The Ultimate Fix)
         # "Even if the validation data is perfect (0.98),
         #  allow anything above 0.90 to pass."
-        final_threshold = min(calc_threshold, 0.90)
+        final_threshold = min(calc_threshold, 0.80)
 
         return final_threshold
 
