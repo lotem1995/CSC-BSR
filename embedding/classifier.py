@@ -539,29 +539,40 @@ class FENClassifier:
                 print(f"[OOD] Tile 0 Score: {max_similarity:.4f} < Threshold {current_threshold:.4f}")
 
         return predictions, confidences, is_ood
-    
+
     def save(self, path: str):
-        """Save per-tile classifier to disk"""
+        """Save GLOBAL classifier to disk"""
+        print(f"Saving global classifier with {len(self.global_embeddings)} embeddings...")
         torch.save({
-            'tile_database': self.tile_database,
-            'tile_embeddings_index': self.tile_embeddings_index,
-            'tile_labels_index': self.tile_labels_index,
-            'tile_scalers': self.tile_scalers,
-            'tile_mahal_inv_covs': self.tile_mahal_inv_covs,
-            'tile_class_means': self.tile_class_means,
-            'tile_ood_thresholds': self.tile_ood_thresholds
+            'global_embeddings': self.global_embeddings,
+            'global_labels': self.global_labels,
+            'global_threshold': self.global_threshold
         }, path)
-    
+        print("Saved successfully.")
+
     def load(self, path: str):
-        """Load per-tile classifier from disk"""
+        """Load GLOBAL classifier from disk"""
+        print(f"Loading classifier from {path}...")
+        if not os.path.exists(path):
+            print("Warning: Checkpoint not found. Database will be empty.")
+            return
+
         data = torch.load(path)
-        self.tile_database = data['tile_database']
-        self.tile_embeddings_index = data['tile_embeddings_index']
-        self.tile_labels_index = data['tile_labels_index']
-        self.tile_scalers = data['tile_scalers']
-        self.tile_mahal_inv_covs = data['tile_mahal_inv_covs']
-        self.tile_class_means = data.get('tile_class_means', {})  # Backward compatibility
-        self.tile_ood_thresholds = data.get('tile_ood_thresholds', {})
+
+        # Check if this is an old format file (migration check)
+        if 'tile_database' in data:
+            print("[WARNING] This is an OLD format file (Per-Tile). Ignoring it.")
+            print("Please uncomment Step 4 in test_classifier.py to rebuild the database.")
+            return
+
+        self.global_embeddings = data['global_embeddings']
+        self.global_labels = data['global_labels']
+
+        # Restore threshold if it exists, otherwise keep default
+        if 'global_threshold' in data:
+            self.global_threshold = data['global_threshold']
+
+        print(f"Loaded {len(self.global_embeddings)} global embeddings.")
 
 
 # Example usage:
