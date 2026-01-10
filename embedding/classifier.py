@@ -491,9 +491,12 @@ class FENClassifier:
     def _predict_ood_knn(self, tile_embeddings: torch.Tensor, k: int,
                          threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-        # Reuse the logic from predict_knn
         if self.index_embeddings is None:
             raise ValueError("Call build_index() first")
+
+        # FIX: Ensure the input is on the same device as the database (GPU)
+        device = self.index_embeddings.device
+        tile_embeddings = tile_embeddings.to(device)
 
         # Use the auto-calculated threshold if none provided
         current_threshold = threshold if threshold is not None else self.global_threshold
@@ -519,8 +522,8 @@ class FENClassifier:
             # Global Check: Is the best match good enough?
             is_ood[i] = max_similarity < current_threshold
 
-            # DEBUG PRINT
-            if i == 0 and is_ood[i]:
+            # Debug only strictly bad failures
+            if is_ood[i] and i == 0:
                 print(f"[OOD] Tile 0 Score: {max_similarity:.4f} < Threshold {current_threshold:.4f}")
 
         return predictions, confidences, is_ood
