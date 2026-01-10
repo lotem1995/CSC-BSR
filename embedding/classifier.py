@@ -183,7 +183,7 @@ class FENClassifier:
         max_scores, _ = sim_matrix.max(dim=1)
 
         # Use 1st Percentile (reject the worst 1% of valid data)
-        calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 1))
+        calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 0.2))
 
         # Apply Safety Ceiling (0.75 is usually good for global DINOv2)
         self.global_threshold = min(calc_threshold, 0.60)
@@ -393,7 +393,7 @@ class FENClassifier:
         ith_neighbor_scores = top_k_scores[:, -1].cpu().numpy()
 
         if len(ith_neighbor_scores) == 0:
-            return 0.7  # Fallback default
+            return 0.6  # Fallback default
 
         # CHANGE 1: Use 1st percentile (More relaxed than 5th)
         calc_threshold = float(np.percentile(ith_neighbor_scores, 1))
