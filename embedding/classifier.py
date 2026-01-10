@@ -186,8 +186,8 @@ class FENClassifier:
         calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 1))
 
         # Apply Safety Ceiling (0.75 is usually good for global DINOv2)
-        self.global_threshold = min(calc_threshold, 0.65)
-        print(f"Global OOD Threshold set to: {self.global_threshold:.4f}, calc_threshold:f{calc_threshold}")
+        self.global_threshold = min(calc_threshold, 0.60)
+        print(f"Global OOD Threshold set to: {self.global_threshold:.4f}, calc_threshold:{calc_threshold:.4f}")
     
     # ============ METHOD 1: KNN ============
     def predict_knn(self, tile_embeddings: torch.Tensor, k: int = 5) -> Tuple[np.ndarray, np.ndarray]:
@@ -524,10 +524,6 @@ class FENClassifier:
 
             # Global Check: Is the best match good enough?
             is_ood[i] = max_similarity < current_threshold
-
-            # Debug only strictly bad failures
-            if is_ood[i] and i == 0:
-                print(f"[OOD] Tile 0 Score: {max_similarity:.4f} < Threshold {current_threshold:.4f}")
 
         return predictions, confidences, is_ood
 
