@@ -396,7 +396,7 @@ def main():
     accuracy = evaluate_on_test_csv(
         classifier=classifier,
         test_csv_path=TEST_CSV,
-        method="knn",  # or "knn"
+        method="mahalanobis",  # or "knn"
         ood_output_dir = "ood_inspection_images"
     )
     
