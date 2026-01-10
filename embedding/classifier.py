@@ -59,10 +59,10 @@ class FENClassifier:
         self.knn_ood_using_similarity = False
 
         self.knn_distance_threshold = 1.1
-        self.knn_ood_using_distance = True
+        self.knn_ood_using_distance = False
 
         self.knn_MIN_CONSENSUS = 0.7
-        self.knn_ood_using_vote = False
+        self.knn_ood_using_vote = True
 
         # Embedding extractor setup (Keep as is)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
