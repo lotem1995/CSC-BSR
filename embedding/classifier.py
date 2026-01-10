@@ -403,7 +403,7 @@ class FENClassifier:
             return 20.0  # Increased fallback from 3.0 to 20.0 (realistic for DINO)
 
         # 3. Percentile Calculation
-        calc_threshold = float(np.percentile(distances, 95))
+        calc_threshold = float(np.percentile(distances, 99))
 
         # 4. SAFETY FLOOR (Crucial for high dimensions)
         # Prevent threshold from being impossibly low if validation data is too clean
