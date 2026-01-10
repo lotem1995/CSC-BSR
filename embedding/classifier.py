@@ -186,7 +186,7 @@ class FENClassifier:
         calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 0.1))
 
         # Apply Safety Ceiling (0.75 is usually good for global DINOv2)
-        self.global_threshold = min(calc_threshold, 0.60)
+        self.global_threshold = min(calc_threshold, 0.55)
         print(f"Global OOD Threshold set to: {self.global_threshold:.4f}, calc_threshold:{calc_threshold:.4f}")
     
     # ============ METHOD 1: KNN ============
