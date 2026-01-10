@@ -52,8 +52,8 @@ class FENClassifier:
         self.index_embeddings = None  # Tensor [Total_Samples, Dim]
         self.index_labels = None  # Tensor [Total_Samples]
 
-        # OOD Threshold (One single value for the whole board)
-        self.knn_k = 9
+        # --- KNN STORAGE ---
+        self.knn_k = 5
 
         self.knn_similarity_threshold = 0.60
         self.knn_ood_using_similarity = False
@@ -63,6 +63,11 @@ class FENClassifier:
 
         self.knn_MIN_CONSENSUS = 0.7
         self.knn_ood_using_vote = True
+
+        # --- MAHALANOBIS STORAGE ---
+        self.global_means = None  # Tensor [13, Dim] (One mean per class)
+        self.global_cov_inv = None  # Tensor [Dim, Dim] (Shared Inverse Covariance)
+        self.mahal_threshold = 20.0  # OOD Threshold for distance
 
         # Embedding extractor setup (Keep as is)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -152,20 +157,19 @@ class FENClassifier:
         tile_embeddings = self.extract_board_embeddings(board_image)
         self.add_fen_position(fen, tile_embeddings, board_state)
 
-    def predict_with_ood(self, tile_embeddings: torch.Tensor,
-                         method: str = "knn",  # Default to knn for global
-                         ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-
-        # Check GLOBAL index, not per-tile index
+    def predict_with_ood(self, tile_embeddings: torch.Tensor, method: str = "knn") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Main entry point for prediction.
+        Now correctly routes to either KNN or Mahalanobis.
+        """
         if self.index_embeddings is None:
-            raise ValueError("Must call build_index() first")
+            raise ValueError("Must call update_thresholds() first")
 
         if method == "knn":
             return self._predict_ood_knn(tile_embeddings)
         elif method == "mahalanobis":
-            # Mahalanobis is harder to implement globally; sticking to KNN is recommended
-            print("Warning: Global Mahalanobis not implemented. Falling back to KNN.")
-            return self._predict_ood_knn(tile_embeddings)
+            # FIX: Now calling the actual Mahalanobis function
+            return self.predict_mahalanobis(tile_embeddings)
         else:
             raise ValueError(f"Unknown method: {method}")
 
@@ -231,6 +235,77 @@ class FENClassifier:
 
         print(
             f"Thresholds set | AvgSim: {self.knn_similarity_threshold:.4f} | 1/Dist(k): {self.knn_distance_threshold:.4f}")
+
+        # ==========================================
+        # 3. BUILD MAHALANOBIS STATISTICS
+        # ==========================================
+        print("Building Global Mahalanobis Statistics (Tied Covariance)...")
+
+        # Use un-normalized embeddings for Mahalanobis (better for distribution modeling)
+        # We need to restack because self.index_embeddings is normalized
+        raw_embeddings = torch.stack(self.global_embeddings).to(self.device)
+        dim = raw_embeddings.shape[1]
+
+        unique_labels = torch.unique(self.index_labels)
+        max_label = int(unique_labels.max().item())
+
+        # Initialize storage
+        self.global_means = torch.zeros((max_label + 1, dim), device=self.device)
+        centered_data = []
+
+        # A. Calculate Means
+        valid_classes = []
+        for label in unique_labels:
+            label_idx = int(label.item())
+            mask = (self.index_labels == label)
+            class_samples = raw_embeddings[mask]
+
+            class_mean = class_samples.mean(dim=0)
+            self.global_means[label_idx] = class_mean
+
+            # Center data (X - Mean) for covariance
+            centered_data.append(class_samples - class_mean)
+            valid_classes.append(label_idx)
+
+        # B. Calculate Shared Covariance
+        X_centered = torch.cat(centered_data, dim=0)
+        N = X_centered.shape[0]
+
+        # Covariance = (X.T @ X) / (N - 1)
+        cov_matrix = torch.matmul(X_centered.t(), X_centered) / (N - 1)
+
+        # C. Regularize (Add jitter to diagonal to allow inversion)
+        epsilon = 1e-4
+        cov_matrix.fill_diagonal_(cov_matrix.diagonal() + epsilon)
+
+        # D. Invert
+        try:
+            self.global_cov_inv = torch.inverse(cov_matrix)
+        except RuntimeError:
+            print("Error inverting covariance. Falling back to Identity matrix.")
+            self.global_cov_inv = torch.eye(dim, device=self.device)
+
+        # E. Auto-Calibrate Mahalanobis Threshold
+        # Check distances on a subset of training data
+        sample_size = min(2000, N)
+        indices = torch.randperm(N)[:sample_size]
+        sample_subset = raw_embeddings[indices]
+        sample_labels_subset = self.index_labels[indices]
+
+        dists = []
+        for i in range(sample_size):
+            x = sample_subset[i]
+            y_true = sample_labels_subset[i]
+            mean = self.global_means[y_true]
+
+            # Mahalanobis Distance Formula
+            delta = (x - mean).unsqueeze(0)
+            d = torch.sqrt(torch.matmul(torch.matmul(delta, self.global_cov_inv), delta.t()))
+            dists.append(d.item())
+
+        # Set threshold at 99th percentile (reject extreme outliers)
+        self.mahal_threshold = float(np.percentile(dists, 99))
+        print(f"Mahalanobis Threshold set to: {self.mahal_threshold:.4f}")
 
     def save(self, path: str):
         """Save GLOBAL classifier to disk"""
@@ -367,107 +442,73 @@ class FENClassifier:
         return predictions, confidences, is_ood
 
     # ============ METHOD 2: Mahalanobis Distance (Class-Conditional) ============
-    def predict_mahalanobis(self, tile_embeddings: torch.Tensor, k: int = None) -> Tuple[np.ndarray, np.ndarray]:
+    def predict_mahalanobis(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Predict class for each of 64 tiles using class-conditional Mahalanobis distance.
-        Computes distance to each class mean: d_c(x) = (x - μ_c)^T Σ^-1 (x - μ_c)
-        Predicts argmin over classes.
-
-        Args:
-            tile_embeddings: Tensor of shape [64, embedding_dim]
-            k: Unused (kept for API compatibility). Mahalanobis uses class means, not k-NN.
-
-        Returns:
-            (predictions, confidences)
-                predictions: np.ndarray [64] with predicted class (0-16) for each tile
-                confidences: np.ndarray [64] with confidence as exp(-min_distance)
+        Global Mahalanobis prediction using Tied Covariance.
+        Returns: predictions, confidences, is_ood
         """
-        if len(self.tile_mahal_inv_covs) == 0:
-            raise ValueError("Must call build_index() first")
+        if self.global_means is None:
+            raise ValueError("Call update_thresholds() first to build statistics")
 
-        predictions = np.zeros(64, dtype=int)
-        confidences = np.zeros(64, dtype=float)
+        device = self.global_means.device
+        # Use raw embeddings (do not normalize) for Mahalanobis
+        tile_embeddings = tile_embeddings.to(device)
 
-        for tile_idx in range(64):
-            if tile_idx not in self.tile_mahal_inv_covs:
-                # No training data for this tile
-                predictions[tile_idx] = 0
-                confidences[tile_idx] = 0.0
+        batch_size = tile_embeddings.shape[0]
+        n_classes = self.global_means.shape[0]
+
+        predictions = np.zeros(batch_size, dtype=int)
+        confidences = np.zeros(batch_size, dtype=float)
+        is_ood = np.zeros(batch_size, dtype=bool)
+
+        # Calculate distance to EVERY class for each tile
+        # We process one class at a time to save memory
+        dists_per_class = torch.full((batch_size, n_classes), float('inf'), device=device)
+
+        # We iterate only over classes that actually exist in training
+        # (Assuming we stored them or check for zero-means,
+        # but here checking all is safer if means are initialized to 0)
+
+        for c in range(n_classes):
+            mean = self.global_means[c]
+
+            # Skip empty classes (if initialized with zeros and never updated)
+            if mean.abs().sum() == 0:
                 continue
 
-            # Get query embedding for this tile
-            query_emb = tile_embeddings[tile_idx].unsqueeze(0)
-            query_np = query_emb.cpu().numpy()
+            delta = tile_embeddings - mean
 
-            # Get class statistics for this tile
-            scaler = self.tile_scalers[tile_idx]
-            inv_cov = self.tile_mahal_inv_covs[tile_idx]
-            class_means = self.tile_class_means[tile_idx]
+            # Efficient Mahalanobis Distance:
+            # dist = sqrt( diag( delta @ Inv @ delta.T ) )
 
-            # Scale query
-            query_scaled = scaler.transform(query_np)[0]
+            # 1. temp = delta @ Inv
+            temp = torch.matmul(delta, self.global_cov_inv)
 
-            # Compute Mahalanobis distance to each class mean
-            class_distances = {}
-            for class_label, class_mean in class_means.items():
-                diff = query_scaled - class_mean
-                mahal_dist = np.sqrt(diff @ inv_cov @ diff.T)
-                class_distances[class_label] = mahal_dist
+            # 2. dot product row-wise
+            dist_sq = (temp * delta).sum(dim=1)
 
-            # Predict class with minimum distance
-            predicted_label = min(class_distances, key=class_distances.get)
-            min_distance = class_distances[predicted_label]
+            # 3. Sqrt
+            dist = torch.sqrt(torch.clamp(dist_sq, min=0))
 
-            predictions[tile_idx] = predicted_label
+            dists_per_class[:, c] = dist
 
-            # Confidence: exponential decay of distance (clean, calibratable)
-            confidences[tile_idx] = np.exp(-min_distance)
+        # Find closest class
+        min_dists, best_classes = torch.min(dists_per_class, dim=1)
 
-        return predictions, confidences
+        min_dists_np = min_dists.cpu().numpy()
+        best_classes_np = best_classes.cpu().numpy()
 
-    def _calc_mahal_threshold(self, tile_idx: int) -> float:
-        # 1. Verification: Does data exist?
-        if tile_idx not in self.tile_database:
-            print(f"[DEBUG ERR] Tile {tile_idx} not in database!")
-            return 20.0  # Safer fallback
+        for i in range(batch_size):
+            predictions[i] = best_classes_np[i]
 
-        tile_data = self.tile_database[tile_idx]
-        if len(tile_data) == 0:
-            print(f"[DEBUG ERR] Tile {tile_idx} database entry is empty!")
-            return 20.0
+            # Confidence: exp(-distance)
+            confidences[i] = np.exp(-min_dists_np[i])
 
-            # 2. Calculation
-        print("calculating mahal threshold")
-        scaler = self.tile_scalers[tile_idx]
-        inv_cov = self.tile_mahal_inv_covs[tile_idx]
-        class_means = self.tile_class_means[tile_idx]
+            # OOD Check
+            if min_dists_np[i] > self.mahal_threshold:
+                is_ood[i] = True
 
-        raw_embs = torch.stack([item['embedding'] for item in tile_data]).cpu().numpy()
-        labels = [item['label'] for item in tile_data]
-
-        scaled_embs = scaler.transform(raw_embs)
-        distances = []
-
-        for i, emb in enumerate(scaled_embs):
-            label = labels[i]
-            mean = class_means[label]
-            diff = emb - mean
-            dist = np.sqrt(diff @ inv_cov @ diff.T)
-            distances.append(dist)
-
-        if not distances:
-            print(f"[DEBUG ERR] Tile {tile_idx}: Loop finished but no distances calculated.")
-            return 20.0  # Increased fallback from 3.0 to 20.0 (realistic for DINO)
-
-        # 3. Percentile Calculation
-        calc_threshold = float(np.percentile(distances, 95))
-
-        # 4. SAFETY FLOOR (Crucial for high dimensions)
-        # Prevent threshold from being impossibly low if validation data is too clean
-        print(f"calc_threshold: {calc_threshold}")
-        final_threshold = max(calc_threshold, 15.0)
-
-        return calc_threshold
+        return predictions, confidences, is_ood
 
 
     # ============ METHOD 3: OOD Detection (Per-tile, Distance-based) ============
