@@ -53,7 +53,7 @@ class FENClassifier:
         self.index_labels = None  # Tensor [Total_Samples]
 
         # OOD Threshold (One single value for the whole board)
-        self.knn_k = 5
+        self.knn_k = 9
 
         self.knn_similarity_threshold = 0.60
         self.knn_ood_using_similarity = False
