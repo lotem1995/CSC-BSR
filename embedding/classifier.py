@@ -194,11 +194,14 @@ class FENClassifier:
         if self.index_embeddings is None:
             raise ValueError("Call build_index() first")
 
+            # FIX: Move to GPU
+        device = self.index_embeddings.device
+        tile_embeddings = tile_embeddings.to(device)
+
         # 1. Prepare Query (64 x Dim)
         query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
 
-        # 2. Global Search: Compare 64 queries vs 5000+ database samples
-        # Result: [64 x N_Global] similarity matrix
+        # 2. Global Search
         sim_matrix = torch.mm(query, self.index_embeddings.t())
 
         # 3. Find Top K matches
