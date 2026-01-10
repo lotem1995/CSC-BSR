@@ -13,7 +13,8 @@ IMPORTANT: This script must be run from the project root directory:
 
 The CSV files contain paths relative to project root (e.g., 'preprocessed_data/...').
 """
-
+import os
+import shutil
 import sys
 from pathlib import Path
 import torch
@@ -181,7 +182,8 @@ def evaluate_on_test_csv(
     classifier: FENClassifier,
     test_csv_path: str,
     data_root: str = "data",
-    method: str = "mahalanobis"
+    method: str = "mahalanobis",
+    ood_output_dir: str = "ood_failures"
 ):
     """
     Evaluate the classifier on test.csv.
@@ -194,6 +196,11 @@ def evaluate_on_test_csv(
     """
     print(f"\nEvaluating on {test_csv_path}")
     print(f"Method: {method}")
+
+    if os.path.exists(ood_output_dir):
+        shutil.rmtree(ood_output_dir)  # Delete old run
+    os.makedirs(ood_output_dir)  # Create new folder
+    print(f"Saving OOD images to: {ood_output_dir}/")
     
     # Load test CSV
     df = pd.read_csv(test_csv_path)
@@ -203,6 +210,7 @@ def evaluate_on_test_csv(
     
     total_tiles = 0
     correct_tiles = 0
+    ood_count = 0
     
     for board_id in tqdm(board_ids, desc="Evaluating boards"):
         # Get all 64 tiles for this board
@@ -235,24 +243,53 @@ def evaluate_on_test_csv(
         # Extract embeddings
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
         
-        # Predict
-        if method == "knn":
-            predictions, confidences = classifier.predict_knn(tile_embeddings, k=5)
-        else:
-            predictions, confidences = classifier.predict_mahalanobis(tile_embeddings)
-        
+        # # Predict
+        # if method == "knn":
+        #     predictions, confidences = classifier.predict_knn(tile_embeddings, k=5)
+        # else:
+        #     predictions, confidences = classifier.predict_mahalanobis(tile_embeddings)
+        predictions, confidences, is_ood = classifier.predict_with_ood(
+            tile_embeddings,
+            method=method,
+            threshold=None
+        )
+
         # Compute accuracy for this board
         correct = (predictions == true_labels).sum()
         total_tiles += 64
         correct_tiles += correct
+        ood_count += is_ood.sum()
+
+        if np.any(is_ood):
+            # Get the indices (0-63) of the OOD tiles
+            ood_indices = np.where(is_ood)[0]
+
+            for idx in ood_indices:
+                # Calculate row/col for filename
+                row, col = divmod(idx, 8)
+                pred_cls = predictions[idx]
+                true_cls = true_labels[idx]
+
+                # Create a helpful filename:
+                # boardID_tileA1_True(Pawn)_Pred(Empty).png
+                tile_name = f"{board_id}_tile{row}{col}_True{true_cls}_Pred{pred_cls}.png"
+                save_path = os.path.join(ood_output_dir, tile_name)
+
+                # Save the image
+                # (We resize to 224x224 so it's big enough to see clearly)
+                img_to_save = tile_images[idx].resize((224, 224))
+                img_to_save.save(save_path)
     
     # Overall accuracy
     accuracy = correct_tiles / total_tiles if total_tiles > 0 else 0
+    ood_rate = ood_count / total_tiles if total_tiles > 0 else 0
     print(f"\n{'='*60}")
     print(f"Test Results:")
     print(f"  Total tiles: {total_tiles}")
     print(f"  Correct: {correct_tiles}")
     print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
+    print(f"  OOD Flags: {ood_count} ({ood_rate * 100:.2f}%)")
+    print(f"  Check '{ood_output_dir}' to see the confused images!")
     print(f"{'='*60}")
     
     return accuracy
@@ -296,6 +333,8 @@ def main():
     # Step 2: Initialize classifier with fine-tuned embeddings
     print(f"\n2. Initializing FENClassifier with fine-tuned embeddings...")
     classifier = FENClassifier(embedding_extractor=embedding_model)
+    classifier_path = "classifier.json"
+    classifier.save(str(classifier_path))
     
     # Step 3: Load validation data for KNN/Mahalanobis database
     print(f"\n3. Loading validation data from {VAL_CSV}...")
@@ -343,6 +382,8 @@ def main():
             tile_embeddings=tile_embeddings,
             board_state=board_state
         )
+
+    classifier.save(str(classifier_path))
     
     # Step 5: Build index
     print(f"\n5. Building KNN/Mahalanobis indices...")
@@ -353,7 +394,8 @@ def main():
     accuracy = evaluate_on_test_csv(
         classifier=classifier,
         test_csv_path=TEST_CSV,
-        method="mahalanobis"  # or "knn"
+        method="mahalanobis",  # or "knn"
+        ood_output_dir = "ood_inspection_images"
     )
     
     print(f"\n✓ Done! Test accuracy: {accuracy:.4f}")

@@ -61,6 +61,7 @@ class FENClassifier:
         self.tile_scalers = {}  # int -> StandardScaler
         self.tile_mahal_inv_covs = {}  # int -> ndarray [embedding_dim, embedding_dim]
         self.tile_class_means = {}  # int -> dict mapping class_label -> mean embedding
+        self.tile_ood_thresholds = {} # Format: { tile_idx: { 'knn': float, 'mahalanobis': float } }
         
         # Embedding extractor (must implement EmbeddingModel interface)
         self.embedding_extractor = embedding_extractor
@@ -170,6 +171,7 @@ class FENClassifier:
         Build per-tile KNN and Mahalanobis indices from the tile database.
         Must be called after adding FEN positions and before prediction.
         """
+        self.tile_ood_thresholds = {}  # Reset cache because data changed
         for tile_idx in range(64):
             if tile_idx not in self.tile_database or len(self.tile_database[tile_idx]) == 0:
                 continue
@@ -366,6 +368,79 @@ class FENClassifier:
             raise ValueError(f"Unknown method: {method}")
     
     # ============ METHOD 3: OOD Detection (Per-tile, Distance-based) ============
+    def _calc_mahal_threshold(self, tile_idx: int) -> float:
+        # Get stats for this tile
+        scaler = self.tile_scalers[tile_idx]
+        inv_cov = self.tile_mahal_inv_covs[tile_idx]
+        class_means = self.tile_class_means[tile_idx]
+
+        # Get all training embeddings for this tile
+        tile_data = self.tile_database[tile_idx]
+        # Stack them into a tensor and convert to numpy
+        raw_embs = torch.stack([item['embedding'] for item in tile_data]).cpu().numpy()
+        labels = [item['label'] for item in tile_data]
+
+        # Calculate distance of every training point to its OWN class center
+        scaled_embs = scaler.transform(raw_embs)
+        distances = []
+
+        for i, emb in enumerate(scaled_embs):
+            label = labels[i]
+            mean = class_means[label]
+            # Standard Mahalanobis distance math
+            diff = emb - mean
+            dist = np.sqrt(diff @ inv_cov @ diff.T)
+            distances.append(dist)
+
+        if not distances:
+            return 3.0  # Fallback default
+
+        # Set threshold to cover 95% of known data (reject 5% outliers)
+        calculated_threshold = float(np.percentile(distances, 95))
+        final_threshold = max(calculated_threshold, 10.0)
+        return final_threshold
+
+    def _calc_knn_threshold(self, tile_idx: int, k: int) -> float:
+        # Get all stored embeddings
+        stored_embs = self.tile_embeddings_index[tile_idx]
+
+        # Compare every point to every other point (Self-Similarity Matrix)
+        sim_matrix = torch.mm(stored_embs, stored_embs.t())
+
+        # Find the score of the k-th nearest neighbor
+        # We need k+1 because the closest match is always itself (score 1.0)
+        k_adj = min(k + 1, len(stored_embs))
+        top_k_scores, _ = torch.topk(sim_matrix, k=k_adj, dim=1)
+
+        # The last column is the score of the neighbor we care about
+        ith_neighbor_scores = top_k_scores[:, -1].cpu().numpy()
+
+        if len(ith_neighbor_scores) == 0:
+            return 0.7  # Fallback default
+
+        # Set threshold to the 5th percentile (reject bottom 5% scores)
+        return float(np.percentile(ith_neighbor_scores, 5))
+
+    def _get_or_calculate_threshold(self, tile_idx: int, method: str, k: int = 3) -> float:
+        # Check cache: Do we have it?
+        if tile_idx in self.tile_ood_thresholds:
+            if method in self.tile_ood_thresholds[tile_idx]:
+                return self.tile_ood_thresholds[tile_idx][method]
+        else:
+            self.tile_ood_thresholds[tile_idx] = {}
+
+        # Calculate if missing
+        if method == "mahalanobis":
+            threshold = self._calc_mahal_threshold(tile_idx)
+        elif method == "knn":
+            threshold = self._calc_knn_threshold(tile_idx, k)
+        else:
+            raise ValueError(f"Unknown threshold method: {method}")
+
+        # Save to cache and return
+        self.tile_ood_thresholds[tile_idx][method] = threshold
+        return threshold
+
     def predict_with_ood(self, tile_embeddings: torch.Tensor, 
                          method: str = "mahalanobis",
                          k: int = 3,
@@ -412,6 +487,10 @@ class FENClassifier:
                 confidences[tile_idx] = 0.0
                 is_ood[tile_idx] = True
                 continue
+
+            if threshold is None:
+                # Calculate or fetch cached threshold automatically
+                threshold = self._get_or_calculate_threshold(tile_idx, "mahalanobis")
             
             # Get query embedding
             query_emb = tile_embeddings[tile_idx].unsqueeze(0)
@@ -435,6 +514,12 @@ class FENClassifier:
             # Get prediction and min distance
             predicted_label = min(class_distances, key=class_distances.get)
             min_distance = class_distances[predicted_label]
+
+            if tile_idx == 0 and min_distance > threshold:
+                print(f"\n[DEBUG OOD FAIL] Tile {tile_idx}:")
+                print(f"  > Threshold (from Val): {threshold:.4f}")
+                print(f"  > Actual Distance (Test): {min_distance:.4f}")
+                print(f"  > Difference: {min_distance - threshold:.4f}")
             
             predictions[tile_idx] = predicted_label
             confidences[tile_idx] = np.exp(-min_distance)
@@ -455,6 +540,9 @@ class FENClassifier:
                 confidences[tile_idx] = 0.0
                 is_ood[tile_idx] = True
                 continue
+
+            if threshold is None:
+                threshold = self._get_or_calculate_threshold(tile_idx, "knn", k)
             
             # Get query embedding (normalized)
             query_emb = tile_embeddings[tile_idx].unsqueeze(0)
@@ -495,6 +583,7 @@ class FENClassifier:
             'tile_scalers': self.tile_scalers,
             'tile_mahal_inv_covs': self.tile_mahal_inv_covs,
             'tile_class_means': self.tile_class_means,
+            'tile_ood_thresholds': self.tile_ood_thresholds
         }, path)
     
     def load(self, path: str):
@@ -506,6 +595,7 @@ class FENClassifier:
         self.tile_scalers = data['tile_scalers']
         self.tile_mahal_inv_covs = data['tile_mahal_inv_covs']
         self.tile_class_means = data.get('tile_class_means', {})  # Backward compatibility
+        self.tile_ood_thresholds = data.get('tile_ood_thresholds', {})
 
 
 # Example usage:
