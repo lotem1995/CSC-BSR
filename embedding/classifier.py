@@ -276,7 +276,7 @@ class FENClassifier:
 
         # C. Regularize (Add jitter to diagonal to allow inversion)
         epsilon = 1e-4
-        cov_matrix.fill_diagonal_(cov_matrix.diagonal() + epsilon)
+        cov_matrix.diagonal().add_(epsilon)
 
         # D. Invert
         try:
