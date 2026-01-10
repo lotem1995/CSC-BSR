@@ -572,6 +572,7 @@ class FENClassifier:
             
             # Compute cosine similarities
             similarities = torch.nn.functional.cosine_similarity(query_emb, stored_embs, dim=1)
+            print(similarities)
             
             # Get top-k matches
             top_k_scores, top_k_indices = torch.topk(similarities, k=k_actual)
