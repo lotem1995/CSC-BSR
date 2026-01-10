@@ -186,7 +186,7 @@ class FENClassifier:
         calc_threshold = float(np.percentile(max_scores.cpu().numpy(), 0.1))
 
         # Apply Safety Ceiling (0.75 is usually good for global DINOv2)
-        self.global_threshold = min(calc_threshold, 0.55)
+        self.global_threshold = min(calc_threshold, 0.60)
         print(f"Global OOD Threshold set to: {self.global_threshold:.4f}, calc_threshold:{calc_threshold:.4f}")
     
     # ============ METHOD 1: KNN ============
@@ -491,6 +491,42 @@ class FENClassifier:
         
         return predictions, confidences, is_ood
 
+    # def _predict_ood_knn(self, tile_embeddings: torch.Tensor, k: int,
+    #                      threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    #
+    #     if self.index_embeddings is None:
+    #         raise ValueError("Call build_index() first")
+    #
+    #     # FIX: Ensure the input is on the same device as the database (GPU)
+    #     device = self.index_embeddings.device
+    #     tile_embeddings = tile_embeddings.to(device)
+    #
+    #     # Use the auto-calculated threshold if none provided
+    #     current_threshold = threshold if threshold is not None else self.global_threshold
+    #
+    #     query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
+    #     sim_matrix = torch.mm(query, self.index_embeddings.t())
+    #     top_k_scores, top_k_indices = torch.topk(sim_matrix, k=k, dim=1)
+    #
+    #     predictions = np.zeros(64, dtype=int)
+    #     confidences = np.zeros(64, dtype=float)
+    #     is_ood = np.zeros(64, dtype=bool)
+    #
+    #     for i in range(64):
+    #         indices = top_k_indices[i].cpu().tolist()
+    #         neighbor_labels = self.index_labels[indices].tolist()
+    #
+    #         predicted_label = max(set(neighbor_labels), key=neighbor_labels.count)
+    #         max_similarity = top_k_scores[i, 0].item()
+    #
+    #         predictions[i] = predicted_label
+    #         confidences[i] = max_similarity
+    #
+    #         # Global Check: Is the best match good enough?
+    #         is_ood[i] = max_similarity < current_threshold
+    #
+    #     return predictions, confidences, is_ood
+
     def _predict_ood_knn(self, tile_embeddings: torch.Tensor, k: int,
                          threshold: float) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
@@ -512,20 +548,47 @@ class FENClassifier:
         confidences = np.zeros(64, dtype=float)
         is_ood = np.zeros(64, dtype=bool)
 
+        # New: Define Consensus Threshold (e.g., 4 out of 5 must agree)
+        # 0.6 = 3/5, 0.8 = 4/5, 1.0 = 5/5
+        MIN_CONSENSUS = 0.7
+
         for i in range(64):
             indices = top_k_indices[i].cpu().tolist()
             neighbor_labels = self.index_labels[indices].tolist()
 
-            predicted_label = max(set(neighbor_labels), key=neighbor_labels.count)
+            # Count votes
+            # e.g., neighbor_labels = [0, 0, 0, 1, 2] -> {0: 3, 1: 1, 2: 1}
+            from collections import Counter
+            vote_counts = Counter(neighbor_labels)
+
+            # Get winner
+            predicted_label, best_vote_count = vote_counts.most_common(1)[0]
+
+            # Calculate Consensus Ratio (e.g., 3/5 = 0.6)
+            consensus_ratio = best_vote_count / k
+
             max_similarity = top_k_scores[i, 0].item()
 
             predictions[i] = predicted_label
             confidences[i] = max_similarity
 
-            # Global Check: Is the best match good enough?
-            is_ood[i] = max_similarity < current_threshold
+            # === HYBRID OOD CHECK ===
+            # 1. Distance Check: Must be similar enough (Your current check)
+            is_distant = max_similarity < current_threshold
+
+            # 2. Ambiguity Check: Neighbors must agree (The new check)
+            is_ambiguous = consensus_ratio < MIN_CONSENSUS
+
+            # Flag as OOD if EITHER is true
+            is_ood[i] = is_ambiguous
+
+            # Debug Print
+            if is_ambiguous and not is_distant and i == 0:
+                print(f"[OOD] Tile 0 Ambiguous: {vote_counts} (Score: {max_similarity:.2f})")
 
         return predictions, confidences, is_ood
+
+
 
     def save(self, path: str):
         """Save GLOBAL classifier to disk"""
