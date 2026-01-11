@@ -22,6 +22,8 @@ from PIL import Image
 import sys
 from collections import Counter
 
+from torch import nn
+
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 from preprocessing.splitting_images import slice_image_with_coordinates
 
@@ -69,12 +71,26 @@ class FENClassifier:
         self.global_cov_inv = None  # Tensor [Dim, Dim] (Shared Inverse Covariance)
         self.mahal_threshold = 20.0  # OOD Threshold for distance
 
+        # === NEW: Add Softmax Defaults here ===
+        self.softmax_temperature = 1.5
+        self.softmax_threshold = 0.70
+
         # Embedding extractor setup (Keep as is)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.embedding_extractor = embedding_extractor
         self.embedding_dim = self.embedding_extractor.get_embedding_dim()
 
+        self.classifier_head: Optional[nn.Module] = None
+
         print(f"Using {self.embedding_extractor} for GLOBAL FEN classification")
+
+    def set_classifier_head(self, head_model: nn.Module):
+        """
+        Attach a trained classifier head (torch.nn.Module) for Softmax predictions.
+        """
+        self.classifier_head = head_model.to(self.device)
+        self.classifier_head.eval()  # Ensure it's in inference mode (no dropout)
+        print("Classifier head attached successfully.")
 
         
     def extract_board_embeddings(self, board_image: Image.Image) -> torch.Tensor:
@@ -162,6 +178,9 @@ class FENClassifier:
         Main entry point for prediction.
         Now correctly routes to either KNN or Mahalanobis.
         """
+        if method == "softmax":
+            return self.predict_softmax(tile_embeddings)
+
         if self.index_embeddings is None:
             raise ValueError("Must call update_thresholds() first")
 
@@ -511,8 +530,41 @@ class FENClassifier:
         return predictions, confidences, is_ood
 
 
-    # ============ METHOD 3: OOD Detection (Per-tile, Distance-based) ============
+    # ============ METHOD 3: temperature ============
+    def predict_softmax(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Predict using the trained classifier head with temperature scaling.
+        Uses self.softmax_temperature and self.softmax_threshold.
+        """
+        # === FIX: Put the actual checks back here ===
+        if self.classifier_head is None:
+            raise ValueError("Classifier head not set. Call set_classifier_head() first.")
 
+        device = self.embedding_extractor.device if self.embedding_extractor else torch.device('cuda')
+
+        tile_embeddings = tile_embeddings.to(device)
+        target_dtype = next(self.classifier_head.parameters()).dtype
+        if tile_embeddings.dtype != target_dtype:
+            tile_embeddings = tile_embeddings.to(dtype=target_dtype)
+        # ============================================
+
+        # 1. Get Logits
+        with torch.no_grad():
+            logits = self.classifier_head(tile_embeddings)
+
+        # 2. Apply Temperature Scaling
+        scaled_logits = logits / self.softmax_temperature
+
+        # 3. Softmax
+        probs = torch.softmax(scaled_logits, dim=1)
+
+        # 4. Get Prediction and Confidence
+        confidences, predictions = torch.max(probs, dim=1)
+
+        # 5. OOD Detection
+        is_ood = confidences < self.softmax_threshold
+
+        return predictions.cpu().numpy(), confidences.cpu().numpy(), is_ood.cpu().numpy()
 
 
 # Example usage:

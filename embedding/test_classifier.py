@@ -24,6 +24,7 @@ from typing import List
 import pandas as pd
 from tqdm import tqdm
 import re
+import torch.nn as nn
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -178,6 +179,35 @@ def parse_tile_coords(image_path: str) -> tuple:
     return int(match.group(1)), int(match.group(2))
 
 
+
+
+
+def load_classifier_head(checkpoint_path: str, embedding_dim: int) -> nn.Module:
+    """
+    Reconstructs the classifier head architecture and loads weights.
+    """
+    print(f"Loading classifier head from {checkpoint_path}...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # DEFINITION MUST MATCH fine_tune.py EXACTLY
+    classifier = nn.Sequential(
+        nn.Linear(embedding_dim, embedding_dim // 2),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        nn.Linear(embedding_dim // 2, 13),
+    )
+
+    # Load the weights
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if 'classifier' not in checkpoint:
+        raise ValueError("Checkpoint does not contain 'classifier' state_dict")
+
+    classifier.load_state_dict(checkpoint['classifier'])
+    classifier.to(device)
+    classifier.eval()  # Freeze it
+    return classifier
+
+
 def evaluate_on_test_csv(
     classifier: FENClassifier,
     test_csv_path: str,
@@ -308,6 +338,8 @@ def main():
     
     VAL_CSV = "data/splits/val.csv"  # Use val for database (NOT train - that was used for fine-tuning!)
     TEST_CSV = "data/splits/test.csv"
+
+    METHOD = "softmax"
     
     print("="*80)
     print("USING FINE-TUNED EMBEDDINGS WITH PER-TILE CLASSIFIER")
@@ -332,72 +364,83 @@ def main():
     # Step 2: Initialize classifier with fine-tuned embeddings
     print(f"\n2. Initializing FENClassifier with fine-tuned embeddings...")
     classifier = FENClassifier(embedding_extractor=embedding_model)
-    classifier_path = "classifier.json"
+    if METHOD == "softmax":
+        # 1. Reconstruct the head
+        head = load_classifier_head(CHECKPOINT_PATH, embedding_model.get_embedding_dim())
+        # 2. Attach it
+        classifier.set_classifier_head(head)
 
-    # Step 3: Load validation data for KNN/Mahalanobis database
-    print(f"\n3. Loading validation data from {VAL_CSV}...")
-    print(f"   (Using VAL not TRAIN to avoid leakage - train was used for fine-tuning)")
-    val_df = pd.read_csv(VAL_CSV)
-    board_ids = val_df['board_id'].unique()
-    print(f"   Found {len(board_ids)} validation boards")
 
-    # Add validation boards to classifier database
-    print(f"\n4. Building per-tile database from validation set...")
-    for board_id in tqdm(board_ids, desc="Adding boards"):
-        board_df = val_df[val_df['board_id'] == board_id].copy()
+    else:
 
-        if len(board_df) != 64:
-            continue
+        # Step 3: Load validation data for KNN/Mahalanobis database
+        print(f"\n3. Loading validation data from {VAL_CSV}...")
+        print(f"   (Using VAL not TRAIN to avoid leakage - train was used for fine-tuning)")
+        val_df = pd.read_csv(VAL_CSV)
+        board_ids = val_df['board_id'].unique()
+        print(f"   Found {len(board_ids)} validation boards")
 
-        # Parse tile coordinates and sort by (row, col) to ensure correct ordering
-        board_df['tile_coords'] = board_df['image'].apply(parse_tile_coords)
-        board_df = board_df.sort_values('tile_coords')
 
-        # Load tile images and labels in correct spatial order
-        tile_images = []
-        board_state = np.zeros((8, 8), dtype=int)
 
-        for _, row in board_df.iterrows():
-            # Parse row/col from filename (guaranteed by sorting above)
-            tile_row, tile_col = parse_tile_coords(row['image'])
+        # Add validation boards to classifier database
+        print(f"\n4. Building per-tile database from validation set...")
+        for board_id in tqdm(board_ids, desc="Adding boards"):
+            board_df = val_df[val_df['board_id'] == board_id].copy()
 
-            # CSV paths are relative to project root (e.g., 'preprocessed_data/...')
-            img_path = Path(row['image'])
-            if not img_path.is_absolute():
-                img_path = Path.cwd() / img_path
+            if len(board_df) != 64:
+                continue
 
-            with Image.open(img_path) as im:
-                tile_images.append(im.convert('RGB').copy())
+            # Parse tile coordinates and sort by (row, col) to ensure correct ordering
+            board_df['tile_coords'] = board_df['image'].apply(parse_tile_coords)
+            board_df = board_df.sort_values('tile_coords')
 
-            board_state[tile_row, tile_col] = row['label']
+            # Load tile images and labels in correct spatial order
+            tile_images = []
+            board_state = np.zeros((8, 8), dtype=int)
 
-        # Extract embeddings using fine-tuned model
-        tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
+            for _, row in board_df.iterrows():
+                # Parse row/col from filename (guaranteed by sorting above)
+                tile_row, tile_col = parse_tile_coords(row['image'])
 
-        # Add to classifier
-        classifier.add_fen_position(
-            fen=board_id,  # Use board_id as FEN placeholder
-            tile_embeddings=tile_embeddings,
-            board_state=board_state
-        )
+                # CSV paths are relative to project root (e.g., 'preprocessed_data/...')
+                img_path = Path(row['image'])
+                if not img_path.is_absolute():
+                    img_path = Path.cwd() / img_path
 
-    # 1. Save the data you just built (so you can use it next time)
-    classifier.save(str(classifier_path))
+                with Image.open(img_path) as im:
+                    tile_images.append(im.convert('RGB').copy())
 
-    # # 2. DO NOT LOAD HERE! (This was wiping your data)
-    # classifier.load(str(classifier_path))
+                board_state[tile_row, tile_col] = row['label']
 
-    # Step 5: Build index (uses the data currently in memory)
-    print(f"\n5. Building KNN indices...")
-    classifier.update_thresholds()
+            # Extract embeddings using fine-tuned model
+            tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
+
+            # Add to classifier
+            classifier.add_fen_position(
+                fen=board_id,  # Use board_id as FEN placeholder
+                tile_embeddings=tile_embeddings,
+                board_state=board_state
+            )
+
+
+        # 1. Save the data you just built (so you can use it next time)
+        classifier_path = "classifier.json"
+        classifier.save(str(classifier_path))
+
+        # # 2. DO NOT LOAD HERE! (This was wiping your data)
+        # classifier.load(str(classifier_path))
+
+        # Step 5: Build index (uses the data currently in memory)
+        print(f"\n5. Building KNN indices...")
+        classifier.update_thresholds()
     
     # Step 6: Evaluate on test set
     print(f"\n6. Evaluating on test set...")
     accuracy = evaluate_on_test_csv(
         classifier=classifier,
         test_csv_path=TEST_CSV,
-        method="mahalanobis",  # or "knn"
-        ood_output_dir = "ood_inspection_images"
+        method=METHOD,
+        ood_output_dir="ood_inspection_images"
     )
     
     print(f"\n✓ Done! Test accuracy: {accuracy:.4f}")
