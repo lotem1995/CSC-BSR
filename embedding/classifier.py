@@ -73,7 +73,7 @@ class FENClassifier:
 
         # === NEW: Add Softmax Defaults here ===
         self.softmax_temperature = 2.0
-        self.softmax_threshold = 0.25
+        self.softmax_threshold = 0.30
 
         # Embedding extractor setup (Keep as is)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
