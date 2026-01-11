@@ -377,8 +377,8 @@ def grid_search_softmax(classifier: FENClassifier, test_csv_path: str):
     # 3. RUN THE GRID SEARCH
     print("\nRunning Grid Search...")
 
-    temperatures = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0]
-    thresholds = [0.50, 0.60, 0.70, 0.80, 0.90, 0.95]
+    temperatures = [0.8, 1.0, 1.5, 2.0, 2.5, 5.0]
+    thresholds   = [0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80]
 
     results = []
 
@@ -411,11 +411,15 @@ def grid_search_softmax(classifier: FENClassifier, test_csv_path: str):
     # 4. PRINT RESULTS TABLE
     results_df = pd.DataFrame(results)
 
-    print("\nTOP 10 CONFIGURATIONS (Sorted by Accuracy):")
-    print(results_df.sort_values(by="Accuracy", ascending=False).head(10).to_string(index=False))
+    # === NEW: Show ALL rows ===
+    pd.set_option('display.max_rows', None)  # Disable truncation
 
-    print("\nTOP 10 CONFIGURATIONS (Sorted by Safety/Lowest Silent Errors):")
-    print(results_df.sort_values(by="Silent_Err", ascending=True).head(10).to_string(index=False))
+    # Sort by OOD Rate so you can easily find your 3% target
+    # Secondary sort by Silent_Err so the best options appear first in that block
+    sorted_df = results_df.sort_values(by=["OOD_Rate", "Silent_Err"], ascending=[True, True])
+
+    print("\nFULL GRID SEARCH RESULTS (Sorted by OOD Rate):")
+    print(sorted_df.to_string(index=False))
 
 
 def main():
