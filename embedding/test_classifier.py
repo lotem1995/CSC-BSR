@@ -340,13 +340,11 @@ def grid_search_softmax(classifier: FENClassifier, test_csv_path: str):
     all_embeddings = []
     all_labels = []
 
-    # We cheat a bit: we use the existing batch extractor to load images faster
-    # But for simplicity in this script, let's just loop and extract
-    # (This part takes time, but only happens ONCE)
     image_paths = []
     labels = []
 
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="Pre-loading Data"):
+    # This loop is fast (just strings)
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Reading CSV paths"):
         img_path = Path(row['image'])
         if not img_path.is_absolute(): img_path = Path.cwd() / img_path
         image_paths.append(img_path)
@@ -354,7 +352,12 @@ def grid_search_softmax(classifier: FENClassifier, test_csv_path: str):
 
     # Process in batches to save RAM/VRAM
     BATCH_SIZE = 32
-    for i in range(0, len(image_paths), BATCH_SIZE):
+
+    # === ADDED TQDM HERE to show "Extracting Embeddings" progress ===
+    total_batches = (len(image_paths) + BATCH_SIZE - 1) // BATCH_SIZE
+
+    for i in tqdm(range(0, len(image_paths), BATCH_SIZE), total=total_batches,
+                  desc="Extracting Embeddings (Slow Step)"):
         batch_paths = image_paths[i:i + BATCH_SIZE]
         batch_imgs = [Image.open(p).convert('RGB') for p in batch_paths]
         emb_batch = classifier.embedding_extractor.extract_batch_embeddings(batch_imgs)
@@ -365,58 +368,49 @@ def grid_search_softmax(classifier: FENClassifier, test_csv_path: str):
     X_test = torch.cat(all_embeddings).to(classifier.device)
     y_test = torch.tensor(all_labels).to(classifier.device)
 
-    # 2. PRE-CALCULATE LOGITS (Heavy computation done once)
+    # 2. PRE-CALCULATE LOGITS
     print("\nPre-calculating raw model outputs...")
     with torch.no_grad():
-        # Ensure head is in eval mode
         classifier.classifier_head.eval()
-        # Get raw scores (logits)
         base_logits = classifier.classifier_head(X_test)
 
-    # 3. RUN THE GRID SEARCH (Instant Math)
+    # 3. RUN THE GRID SEARCH
     print("\nRunning Grid Search...")
 
-    # Define ranges to test
     temperatures = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0]
     thresholds = [0.50, 0.60, 0.70, 0.80, 0.90, 0.95]
 
     results = []
 
-    for temp in temperatures:
-        # Scale logits once per temperature
-        scaled_logits = base_logits / temp
-        probs = torch.softmax(scaled_logits, dim=1)
-        confidences, predictions = torch.max(probs, dim=1)
+    # Use tqdm here too just in case math takes a second
+    total_combos = len(temperatures) * len(thresholds)
+    with tqdm(total=total_combos, desc="Calculating Metrics") as pbar:
+        for temp in temperatures:
+            scaled_logits = base_logits / temp
+            probs = torch.softmax(scaled_logits, dim=1)
+            confidences, predictions = torch.max(probs, dim=1)
 
-        # Check against ground truth
-        is_correct = (predictions == y_test)
+            is_correct = (predictions == y_test)
 
-        for thresh in thresholds:
-            # Check OOD
-            is_ood = confidences < thresh
+            for thresh in thresholds:
+                is_ood = confidences < thresh
 
-            # Metrics
-            acc = is_correct.float().mean().item()
-            ood_rate = is_ood.float().mean().item()
+                acc = is_correct.float().mean().item()
+                ood_rate = is_ood.float().mean().item()
+                silent_errors = (~is_correct & ~is_ood).float().mean().item()
 
-            # "Safe Accuracy": Accuracy considering OOD as "I don't know" (not wrong)
-            # If model is Wrong AND flagged OOD, that's good!
-            # If model is Wrong and NOT flagged, that's a "Silent Error" (Bad)
-
-            silent_errors = (~is_correct & ~is_ood).float().mean().item()
-
-            results.append({
-                "Temp": temp,
-                "Thresh": thresh,
-                "Accuracy": acc,
-                "OOD_Rate": ood_rate,
-                "Silent_Err": silent_errors
-            })
+                results.append({
+                    "Temp": temp,
+                    "Thresh": thresh,
+                    "Accuracy": acc,
+                    "OOD_Rate": ood_rate,
+                    "Silent_Err": silent_errors
+                })
+                pbar.update(1)
 
     # 4. PRINT RESULTS TABLE
     results_df = pd.DataFrame(results)
 
-    # Sort by lowest Silent Error (Safety) or Highest Accuracy
     print("\nTOP 10 CONFIGURATIONS (Sorted by Accuracy):")
     print(results_df.sort_values(by="Accuracy", ascending=False).head(10).to_string(index=False))
 
