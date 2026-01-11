@@ -472,7 +472,7 @@ def main():
         # run_grid_search = False  # Set to True to optimize parameters
 
         if run_grid_search:
-            grid_search_softmax(classifier, TEST_CSV)
+            grid_search_softmax(classifier, VAL_CSV)
             return  # Stop here after search
 
 
