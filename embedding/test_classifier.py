@@ -543,7 +543,7 @@ def main():
     print(f"\n6. Evaluating on test set...")
     accuracy = evaluate_on_test_csv(
         classifier=classifier,
-        test_csv_path=TEST_CSV,
+        test_csv_path=VAL_CSV,
         method=METHOD,
         ood_output_dir="ood_inspection_images"
     )
