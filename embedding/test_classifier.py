@@ -468,8 +468,8 @@ def main():
         classifier.set_classifier_head(head)
 
         # === OPTION: RUN GRID SEARCH INSTEAD OF NORMAL TEST ===
-        # run_grid_search = True
-        run_grid_search = False  # Set to True to optimize parameters
+        run_grid_search = True
+        # run_grid_search = False  # Set to True to optimize parameters
 
         if run_grid_search:
             grid_search_softmax(classifier, TEST_CSV)
