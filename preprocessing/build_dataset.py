@@ -43,6 +43,7 @@ CLASS_MAP = {
     14: "black_rook",
     15: "black_queen",
     16: "black_king",
+    17: "OOD"     #handles hands.
 }
 DEFAULT_SPLIT = {"train": 0.8, "val": 0.1, "test": 0.1}
 
@@ -279,14 +280,14 @@ def _gather_tiles(
     print("[DEBUG] intersection(raw_names, hands_names) =", len(inter))
     print("[DEBUG] sample intersections =", list(sorted(inter))[:8])
 
-    dropped_match = 0
     dropped_inside_hands = 0
     skipped_no_label = 0
     kept = 0
+    relabeled_to_ood = 0
 
     tiles: List[Dict] = []
     for image_path in sorted(raw_png_paths):
-        # Safety: if hands_dir is inside raw_tiles_dir, never include those
+        # Safety: if hands_dir is inside raw_tiles_dir, do NOT ingest the copies inside hands_dir
         try:
             image_path.resolve().relative_to(hands_dir)
             dropped_inside_hands += 1
@@ -294,15 +295,17 @@ def _gather_tiles(
         except ValueError:
             pass
 
-        label = _extract_label(image_path)
-        if label is None:
-            skipped_no_label += 1
-            continue
+        is_hand = image_path.name in hand_tile_names
 
-        # Main rule: drop if same filename exists in hands/
-        if image_path.name in hand_tile_names:
-            dropped_match += 1
-            continue
+        # If it's a hand tile -> force OOD label, do NOT require _class(\d+)
+        if is_hand:
+            label = 17
+            relabeled_to_ood += 1
+        else:
+            label = _extract_label(image_path)
+            if label is None:
+                skipped_no_label += 1
+                continue
 
         board_id = _board_id_from_tile(image_path)
 
@@ -324,16 +327,16 @@ def _gather_tiles(
 
     print("[DEBUG] skipped_no_label =", skipped_no_label)
     print("[DEBUG] dropped_inside_hands =", dropped_inside_hands)
-    print("[DEBUG] dropped_match (hands name match) =", dropped_match)
+    print("[DEBUG] relabeled_to_ood =", relabeled_to_ood)
     print("[DEBUG] kept tiles =", kept)
 
     if not tiles:
         raise RuntimeError(
-            "No tiles with class labels were found AFTER hands filtering. "
-            "Check raw_tiles_dir, hands_dir, and whether filenames truly match."
+            "No tiles were found. Check raw_tiles_dir/hands_dir paths and naming."
         )
 
     return tiles
+
 
 
 def build_manifest(config_path: Path) -> Dict:

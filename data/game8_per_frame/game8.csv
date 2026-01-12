@@ -1,0 +1,8 @@
+from_frame,to_frame,fen
+12,12,rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR
+232,232,rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR
+264,264,rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR
+300,300,rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R
+340,340,r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R
+408,408,r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R
+436,436,r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R
