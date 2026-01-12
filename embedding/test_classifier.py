@@ -437,7 +437,7 @@ def main():
     VAL_CSV = "data/splits/val.csv"  # Use val for database (NOT train - that was used for fine-tuning!)
     TEST_CSV = "data/splits/test.csv"
 
-    METHOD = "softmax"
+    METHOD = "knn"
     
     print("="*80)
     print("USING FINE-TUNED EMBEDDINGS WITH PER-TILE CLASSIFIER")
