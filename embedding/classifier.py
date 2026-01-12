@@ -23,6 +23,7 @@ import sys
 from collections import Counter
 
 from torch import nn
+from unicodedata import is_normalized
 
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 from preprocessing.splitting_images import slice_image_with_coordinates
@@ -51,11 +52,12 @@ class FENClassifier:
         self.global_labels = []  # Will hold the class label for each vector
 
         # The searchable Index (Built later)
-        self.index_embeddings = None  # Tensor [Total_Samples, Dim]
-        self.index_labels = None  # Tensor [Total_Samples]
+        self.normalized_embeddings = None  # Tensor [Total_Samples, Dim]
+        self.normalized_labels = None  # Tensor [Total_Samples]
 
         # --- KNN STORAGE ---
         self.knn_k = 5
+        self.is_normalized = False
 
         self.knn_similarity_threshold = 0.60
         self.knn_ood_using_similarity = False
@@ -92,7 +94,7 @@ class FENClassifier:
         self.classifier_head.eval()  # Ensure it's in inference mode (no dropout)
         print("Classifier head attached successfully.")
 
-        
+
     def extract_board_embeddings(self, board_image: Image.Image) -> torch.Tensor:
         """
         Extract embeddings for all 64 tiles from a chess board image.
@@ -107,26 +109,26 @@ class FENClassifier:
         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_board:
             board_image.save(tmp_board.name)
             tmp_board_path = tmp_board.name
-        
+
         # Get the base filename for tile naming
         base_filename = os.path.splitext(os.path.basename(tmp_board_path))[0]
-        
+
         # Create temp directory for tiles
         with tempfile.TemporaryDirectory() as tmp_tiles_dir:
             # Create a dummy board array (8x8) with placeholder values
             # This is needed by slice_image_with_coordinates for filename generation
             import numpy as np
             dummy_board = np.zeros((8, 8), dtype=int)
-            
+
             # Split board into 64 tiles
             slice_image_with_coordinates(
                 image_path=tmp_board_path,
                 output_folder=tmp_tiles_dir,
                 board=dummy_board,  # Provide dummy board for filename generation
-                overlap_percent=0.0,
+                overlap_percent=0.7,
                 final_size=(224, 224)
             )
-            
+
             # Load all 64 tiles in order (row by row)
             tile_images = []
             for row in range(8):
@@ -139,13 +141,13 @@ class FENClassifier:
                         tile_images.append(Image.open(tile_path).copy())
                     else:
                         raise FileNotFoundError(f"Tile {tile_filename} not found")
-            
+
             # Extract embeddings for all tiles
             tile_embeddings = self.embedding_extractor.extract_batch_embeddings(tile_images)
-        
+
         # Clean up temp board image
         os.unlink(tmp_board_path)
-        
+
         return tile_embeddings
 
     def add_fen_position(self, fen: str, tile_embeddings: torch.Tensor, board_state: Optional[np.ndarray] = None):
@@ -160,7 +162,7 @@ class FENClassifier:
             # We treat every tile identically, regardless of its position (A1 vs E4)
             self.global_embeddings.append(tile_embeddings[tile_idx].float().cpu())
             self.global_labels.append(int(labels_1d[tile_idx]))
-    
+
     def add_fen_from_image(self, fen: str, board_image: Image.Image, board_state: Optional[np.ndarray] = None):
         """
         Add a FEN position by extracting embeddings from a board image.
@@ -181,11 +183,11 @@ class FENClassifier:
         if method == "softmax":
             return self.predict_softmax(tile_embeddings)
 
-        if self.index_embeddings is None:
+        if self.normalized_embeddings is None:
             raise ValueError("Must call update_thresholds() first")
 
         if method == "knn":
-            return self._predict_ood_knn(tile_embeddings)
+            return self.predict_knn(tile_embeddings)
         elif method == "mahalanobis":
             # FIX: Now calling the actual Mahalanobis function
             return self.predict_mahalanobis(tile_embeddings)
@@ -201,21 +203,21 @@ class FENClassifier:
 
         # 1. Stack everything into one giant tensor (N x Dim)
         # Move to GPU immediately for speed
-        self.index_embeddings = torch.stack(self.global_embeddings).to(self.device)
-        self.index_labels = torch.tensor(self.global_labels).to(self.device)
-        self.index_embeddings = torch.nn.functional.normalize(self.index_embeddings, p=2, dim=1)
+        self.normalized_embeddings = torch.stack(self.global_embeddings).to(self.device)
+        self.normalized_labels = torch.tensor(self.global_labels).to(self.device)
+        self.normalized_embeddings = torch.nn.functional.normalize(self.normalized_embeddings, p=2, dim=1)
 
-        print(f"Index built. Shape: {self.index_embeddings.shape}")
+        print(f"Index built. Shape: {self.normalized_embeddings.shape}")
 
         # 3. AUTO-CALIBRATE THRESHOLD (The Self-Check)
         # We check how well the valid data matches itself.
         print("Auto-calibrating global threshold...")
 
         # To save memory/time, we take a random sample of 2000 images for calibration
-        n_samples = self.index_embeddings.shape[0]
+        n_samples = self.normalized_embeddings.shape[0]
         sample_size = min(2000, n_samples)
         indices = torch.randperm(n_samples)[:sample_size]
-        sample_embs = self.index_embeddings[indices]
+        sample_embs = self.normalized_embeddings[indices]
 
         # All-vs-All comparison
         sim_matrix = torch.mm(sample_embs, sample_embs.t())
@@ -261,11 +263,11 @@ class FENClassifier:
         print("Building Global Mahalanobis Statistics (Tied Covariance)...")
 
         # Use un-normalized embeddings for Mahalanobis (better for distribution modeling)
-        # We need to restack because self.index_embeddings is normalized
+        # We need to restack because self.normalized_embeddings is normalized
         raw_embeddings = torch.stack(self.global_embeddings).to(self.device)
         dim = raw_embeddings.shape[1]
 
-        unique_labels = torch.unique(self.index_labels)
+        unique_labels = torch.unique(self.normalized_labels)
         max_label = int(unique_labels.max().item())
 
         # Initialize storage
@@ -276,7 +278,7 @@ class FENClassifier:
         valid_classes = []
         for label in unique_labels:
             label_idx = int(label.item())
-            mask = (self.index_labels == label)
+            mask = (self.normalized_labels == label)
             class_samples = raw_embeddings[mask]
 
             class_mean = class_samples.mean(dim=0)
@@ -309,7 +311,7 @@ class FENClassifier:
         sample_size = min(2000, N)
         indices = torch.randperm(N)[:sample_size]
         sample_subset = raw_embeddings[indices]
-        sample_labels_subset = self.index_labels[indices]
+        sample_labels_subset = self.normalized_labels[indices]
 
         dists = []
         for i in range(sample_size):
@@ -359,69 +361,53 @@ class FENClassifier:
             self.knn_similarity_threshold = data['knn_similarity_threshold']
 
         print(f"Loaded {len(self.global_embeddings)} global embeddings.")
-    
+
     # ============ METHOD 1: KNN ============
-    def predict_knn(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray]:
-        if self.index_embeddings is None:
-            raise ValueError("Call build_index() first")
+    def predict_knn(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
-            # FIX: Move to GPU
-        device = self.index_embeddings.device
-        tile_embeddings = tile_embeddings.to(device)
-
-        # 1. Prepare Query (64 x Dim)
-        query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
-
-        # 2. Global Search
-        sim_matrix = torch.mm(query, self.index_embeddings.t())
-
-        # 3. Find Top K matches
-        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=self.knn_k, dim=1)
-
-        predictions = np.zeros(64, dtype=int)
-        confidences = np.zeros(64, dtype=float)
-
-        # 4. Vote
-        for i in range(64):
-            # Get indices of neighbors
-            indices = top_k_indices[i].cpu().tolist()
-            # Look up their labels
-            neighbor_labels = self.index_labels[indices].tolist()
-
-            # Majority Vote
-            predicted_label = max(set(neighbor_labels), key=neighbor_labels.count)
-
-            predictions[i] = predicted_label
-            # Confidence is the similarity score of the best match
-            confidences[i] = top_k_scores[i, 0].item()
-
-        return predictions, confidences
-
-    def _predict_ood_knn(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-
-        if self.index_embeddings is None:
+        if self.normalized_embeddings is None:
             raise ValueError("Call build_index() first")
 
         # FIX: Ensure the input is on the same device as the database (GPU)
-        device = self.index_embeddings.device
+        device = self.normalized_embeddings.device
         tile_embeddings = tile_embeddings.to(device)
 
-        query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
-        sim_matrix = torch.mm(query, self.index_embeddings.t())
-        top_k_scores, top_k_indices = torch.topk(sim_matrix, k=self.knn_k, dim=1)
+        # --- BRANCH: NORMALIZED VS UNNORMALIZED ---
+        if self.is_normalized:
+            # OPTION A: Cosine Similarity (Normalized)
+            # High Score = Good Match (1.0 is perfect)
+            query = torch.nn.functional.normalize(tile_embeddings, p=2, dim=1)
+
+            # Dot Product
+            sim_matrix = torch.mm(query, self.normalized_embeddings.t())
+
+            # Top-K (Largest)
+            top_k_scores, top_k_indices = torch.topk(sim_matrix, k=self.knn_k, dim=1, largest=True)
+
+        else:
+            # OPTION B: Euclidean Distance (Unnormalized)
+            # Low Score = Good Match (0.0 is perfect)
+            # Note: We assume self.normalized_embeddings contains raw vectors if is_normalized=False
+            query = tile_embeddings
+
+            # Euclidean Distance
+            dists = torch.cdist(query, self.normalized_embeddings, p=2)
+
+            # Top-K (Smallest)
+            raw_dists, top_k_indices = torch.topk(dists, k=self.knn_k, dim=1, largest=False)
+
+            # CONVERSION: Turn Distance into Similarity Score (0-1) for compatibility
+            # sim = 1 / (1 + dist)
+            top_k_scores = 1.0 / (1.0 + raw_dists + 1e-9)
 
         predictions = np.zeros(64, dtype=int)
         confidences = np.zeros(64, dtype=float)
         is_ood = np.zeros(64, dtype=bool)
 
-        # New: Define Consensus Threshold (e.g., 4 out of 5 must agree)
-        # 0.6 = 3/5, 0.8 = 4/5, 1.0 = 5/5
-        MIN_CONSENSUS = self.knn_MIN_CONSENSUS
-
         for i in range(64):
             # 1. Get Neighbors & Labels
             indices = top_k_indices[i].cpu().tolist()
-            neighbor_labels = self.index_labels[indices].tolist()
+            neighbor_labels = self.normalized_labels[indices].tolist()
 
             # 2. Vote Logic (Check 3)
             vote_counts = Counter(neighbor_labels)
@@ -429,12 +415,20 @@ class FENClassifier:
             consensus_ratio = best_vote_count / self.knn_k
 
             # 3. Calculate Metrics
-            # Metric A: Average Similarity
+            # Metric A: Average Similarity (Works for both now)
             avg_similarity = top_k_scores[i].mean().item()
 
             # Metric B: 1 / Distance to k-th Neighbor
+            # For Unnormalized, top_k_scores is already inverted distance
             kth_similarity = top_k_scores[i, -1].item()
-            kth_dist = np.sqrt(max(0, 2 * (1 - kth_similarity)))
+
+            if self.is_normalized:
+                # Convert Cosine Sim back to approximate Distance for OOD check
+                kth_dist = np.sqrt(max(0, 2 * (1 - kth_similarity)))
+            else:
+                # Reverse the conversion: dist = (1/sim) - 1
+                kth_dist = (1.0 / (kth_similarity + 1e-9)) - 1.0
+
             ood_score_kth = 1.0 / (kth_dist + 1e-9)
 
             predictions[i] = predicted_label
