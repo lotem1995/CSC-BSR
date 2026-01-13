@@ -6,7 +6,7 @@ import random
 import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from PIL import Image
@@ -58,7 +58,18 @@ def _load_config(path: Path) -> Dict:
         return json.load(handle)
 
 
-def _validate_split(split: Dict[str, float]) -> Dict[str, float]:
+def _validate_split(split: Dict[str, Any]) -> Dict[str, Any]:
+    # Check if this is a manual split (values are lists of game names)
+    is_manual = all(isinstance(v, list) for v in split.values())
+
+    if is_manual:
+        # Just ensure the required keys exist
+        for key in ("train", "val", "test"):
+            if key not in split:
+                raise ValueError("Manual split dict must contain train, val, and test keys")
+        return split
+
+    # Existing logic for percentage-based splits
     total = sum(split.values())
     if not math.isclose(total, 1.0, rel_tol=1e-3):
         raise ValueError(f"Split ratios must sum to 1.0, got {total:.3f}")
@@ -122,7 +133,7 @@ def _identify_game(board_id: str, known_games: List[str]) -> str:
 
 def _group_stratified_split(
         tiles: List[Dict],
-        split: Dict[str, float],
+        split: Dict[str, Any],  # Changed type hint to Any
         known_games: List[str],
         num_classes: int = NUM_CLASSES,
         seed: int = 42,
@@ -138,21 +149,45 @@ def _group_stratified_split(
         game_id = _identify_game(board_id, known_games)
         games[game_id].append(board_id)
 
-    # 3. Compute Class Counts per Game
-    game_class_counts = _compute_game_class_counts(games, boards, num_classes)
+    # CHECK: Is this a manual split (lists) or automatic (ratios)?
+    is_manual = all(isinstance(v, list) for v in split.values())
 
-    total_counts = sum(game_class_counts.values())
-    desired = _desired_class_counts(total_counts, split)
+    if is_manual:
+        # --- Manual Assignment Logic ---
+        game_assignments = {}
+        for game_id in games:
+            assigned_split = None
 
-    # 4. Assign Games to Splits
-    game_assignments = _assign_groups(
-        game_class_counts,
-        split,
-        len(games),
-        seed,
-    )
+            # Check which list this game belongs to in the yaml
+            for split_name, game_list in split.items():
+                if game_id in game_list:
+                    assigned_split = split_name
+                    break
 
-    # 5. Expand back to tiles
+            # If game found on disk but not in yaml, warn and default to train
+            if assigned_split is None:
+                print(f"[WARNING] Game '{game_id}' found on disk but not in YAML split config. Defaulting to 'train'.")
+                assigned_split = "train"
+
+            game_assignments[game_id] = assigned_split
+
+    else:
+        # --- Existing Automatic Stratification Logic ---
+        # 3. Compute Class Counts per Game
+        game_class_counts = _compute_game_class_counts(games, boards, num_classes)
+
+        total_counts = sum(game_class_counts.values())
+        desired = _desired_class_counts(total_counts, split)
+
+        # 4. Assign Games to Splits
+        game_assignments = _assign_groups(
+            game_class_counts,
+            split,
+            len(games),
+            seed,
+        )
+
+    # 5. Expand back to tiles (Common for both methods)
     return _collect_split_tiles_by_game(games, boards, game_assignments, split)
 
 
@@ -365,6 +400,13 @@ def build_manifest(config_path: Path) -> Dict:
     if data_root_path:
         games_found = _discover_games(data_root_path)
         known_game_names = [g_name for g_name, _, _ in games_found]
+
+        print("\n" + "=" * 60)
+        print(f" [INFO] DETECTED {len(known_game_names)} GAMES IN '{data_root_path}':")
+        print(" (Use these exact names in your dataset_config.yaml)")
+        for name in known_game_names:
+            print(f"   - {name}")
+        print("=" * 60 + "\n")
 
         _generate_tiles_from_games(
             games_found,
