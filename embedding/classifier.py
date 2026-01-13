@@ -94,7 +94,6 @@ class FENClassifier:
         self.classifier_head.eval()  # Ensure it's in inference mode (no dropout)
         print("Classifier head attached successfully.")
 
-
     def extract_board_embeddings(self, board_image: Image.Image) -> torch.Tensor:
         """
         Extract embeddings for all 64 tiles from a chess board image.
@@ -511,7 +510,6 @@ class FENClassifier:
                 is_ood[i] = True
 
         return predictions, confidences, is_ood
-
 
     # ============ METHOD 3: temperature ============
     def predict_softmax(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:

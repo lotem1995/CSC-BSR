@@ -209,120 +209,167 @@ def load_classifier_head(checkpoint_path: str, embedding_dim: int) -> nn.Module:
 
 
 def evaluate_on_test_csv(
-    classifier: FENClassifier,
-    test_csv_path: str,
-    data_root: str = "data",
-    method: str = "mahalanobis",
-    ood_output_dir: str = "ood_failures"
+        classifier: FENClassifier,
+        test_csv_path: str,
+        data_root: str = "data",
+        method: str = "mahalanobis",
+        ood_output_dir: str = "ood_failures"
 ):
     """
-    Evaluate the classifier on test.csv.
-    
-    Args:
-        classifier: Trained FENClassifier instance
-        test_csv_path: Path to test.csv
-        data_root: Root directory for image paths
-        method: "knn" or "mahalanobis"
+    Evaluate the classifier with detailed OOD metrics.
+    Separates 'Safety' (False Rejections) from 'Detection' (Recall on Class 17).
     """
     print(f"\nEvaluating on {test_csv_path}")
     print(f"Method: {method}")
 
     if os.path.exists(ood_output_dir):
-        shutil.rmtree(ood_output_dir)  # Delete old run
-    os.makedirs(ood_output_dir)  # Create new folder
-    print(f"Saving OOD images to: {ood_output_dir}/")
-    
+        shutil.rmtree(ood_output_dir)
+    os.makedirs(ood_output_dir)
+    print(f"Saving OOD inspection images to: {ood_output_dir}/")
+
     # Load test CSV
     df = pd.read_csv(test_csv_path)
-    
-    # Group by board_id to evaluate whole boards
     board_ids = df['board_id'].unique()
-    
-    total_tiles = 0
-    correct_tiles = 0
-    ood_count = 0
-    
+
+    # --- STORAGE FOR METRICS ---
+    all_true_labels = []
+    all_predictions = []
+    all_is_ood = []
+
+    # Define the OOD Label
+    OOD_LABEL = 17
+
     for board_id in tqdm(board_ids, desc="Evaluating boards"):
-        # Get all 64 tiles for this board
         board_df = df[df['board_id'] == board_id].copy()
-        
+
         if len(board_df) != 64:
-            print(f"Warning: Board {board_id} has {len(board_df)} tiles, skipping")
             continue
-        
-        # Parse tile coordinates and sort by (row, col) to ensure correct ordering
+
+        # Sort and Load
         board_df['tile_coords'] = board_df['image'].apply(parse_tile_coords)
         board_df = board_df.sort_values('tile_coords')
-        
-        # Load tile images in correct order
+
         tile_images = []
         true_labels = []
         for _, row in board_df.iterrows():
-            # CSV paths are relative to project root (e.g., 'preprocessed_data/...')
             img_path = Path(row['image'])
             if not img_path.is_absolute():
-                # Resolve relative to current directory (project root)
                 img_path = Path.cwd() / img_path
-            
+
             with Image.open(img_path) as im:
                 tile_images.append(im.convert('RGB').copy())
             true_labels.append(row['label'])
-        
-        true_labels = np.array(true_labels)
-        
-        # Extract embeddings
+
+        # Predict
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
-        
-        # # Predict
-        # if method == "knn":
-        #     predictions, confidences = classifier.predict_knn(tile_embeddings, k=5)
-        # else:
-        #     predictions, confidences = classifier.predict_mahalanobis(tile_embeddings)
         predictions, confidences, is_ood = classifier.predict_with_ood(
             tile_embeddings,
             method=method
         )
 
-        # Compute accuracy for this board
-        correct = (predictions == true_labels).sum()
-        total_tiles += 64
-        correct_tiles += correct
-        ood_count += is_ood.sum()
+        # Store Data
+        all_true_labels.extend(true_labels)
+        all_predictions.extend(predictions)
+        all_is_ood.extend(is_ood)
 
-        if np.any(is_ood):
-            # Get the indices (0-63) of the OOD tiles
-            ood_indices = np.where(is_ood)[0]
+        # --- SAVE FAILURE IMAGES ---
+        # We save images if:
+        # 1. False Rejection: It was valid (0-12), but we flagged it as OOD.
+        # 2. Missed OOD: It was OOD (17), but we let it pass.
 
-            for idx in ood_indices:
-                # Calculate row/col for filename
-                row, col = divmod(idx, 8)
-                pred_cls = predictions[idx]
-                true_cls = true_labels[idx]
+        # Check if we need to inspect this board
+        has_false_rejection = np.any((np.array(true_labels) != OOD_LABEL) & is_ood)
+        has_missed_ood = np.any((np.array(true_labels) == OOD_LABEL) & (~is_ood))
 
-                # Create a helpful filename:
-                # boardID_tileA1_True(Pawn)_Pred(Empty).png
-                tile_name = f"{board_id}_tile{row}{col}_True{true_cls}_Pred{pred_cls}.png"
-                save_path = os.path.join(ood_output_dir, tile_name)
+        if has_false_rejection or has_missed_ood:
+            for idx in range(64):
+                t_lbl = true_labels[idx]
+                p_lbl = predictions[idx]
+                flagged = is_ood[idx]
 
-                # Save the image
-                # (We resize to 224x224 so it's big enough to see clearly)
-                img_to_save = tile_images[idx].resize((224, 224))
-                img_to_save.save(save_path)
-    
-    # Overall accuracy
-    accuracy = correct_tiles / total_tiles if total_tiles > 0 else 0
-    ood_rate = ood_count / total_tiles if total_tiles > 0 else 0
-    print(f"\n{'='*60}")
-    print(f"Test Results:")
-    print(f"  Total tiles: {total_tiles}")
-    print(f"  Correct: {correct_tiles}")
-    print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
-    print(f"  OOD Flags: {ood_count} ({ood_rate * 100:.2f}%)")
-    print(f"  Check '{ood_output_dir}' to see the confused images!")
-    print(f"{'='*60}")
-    
-    return accuracy
+                # Logic to name files helpfully
+                if (t_lbl != OOD_LABEL) and flagged:
+                    # Case A: False Rejection (Bad for user experience)
+                    fname = f"FalseReject_{board_id}_tile{idx}_True{t_lbl}.png"
+                    save_path = os.path.join(ood_output_dir, fname)
+                    tile_images[idx].resize((224, 224)).save(save_path)
 
+                elif (t_lbl == OOD_LABEL) and not flagged:
+                    # Case B: Missed OOD (Bad for safety)
+                    fname = f"MissedOOD_{board_id}_tile{idx}_Pred{p_lbl}.png"
+                    save_path = os.path.join(ood_output_dir, fname)
+                    tile_images[idx].resize((224, 224)).save(save_path)
+
+    # ---------------------------------------------------------
+    # CALCULATE METRICS
+    # ---------------------------------------------------------
+    y_true = np.array(all_true_labels)
+    y_pred = np.array(all_predictions)
+    is_ood_flag = np.array(all_is_ood)
+
+    # Masks
+    ood_mask = (y_true == OOD_LABEL)  # The "Real" 17s
+    id_mask = ~ood_mask  # The Normal pieces (0-12)
+
+    # --- 1. OOD Detection Metrics (Ability to catch Class 17) ---
+    n_ood = np.sum(ood_mask)
+    if n_ood > 0:
+        ood_detected = np.sum(is_ood_flag[ood_mask])
+        ood_recall = ood_detected / n_ood
+    else:
+        ood_detected, ood_recall = 0, 0.0
+
+    # --- 2. ID Classification Metrics (Ability to classify 0-12) ---
+    n_id = np.sum(id_mask)
+    if n_id > 0:
+        # False Rejection Rate: How many valid pieces did we accidentally reject?
+        id_rejected = np.sum(is_ood_flag[id_mask])
+        id_false_ood_rate = id_rejected / n_id
+
+        # Clean Accuracy: Accuracy ONLY on tiles we accepted
+        accepted_mask = id_mask & (~is_ood_flag)
+        n_accepted = np.sum(accepted_mask)
+
+        if n_accepted > 0:
+            correct_preds = np.sum(y_pred[accepted_mask] == y_true[accepted_mask])
+            clean_accuracy = correct_preds / n_accepted
+        else:
+            clean_accuracy = 0.0
+
+        # Overall Strict Accuracy
+        # Correct = (ID & Accepted & Correct) + (OOD & Rejected)
+        correct_id_cnt = np.sum((y_pred[id_mask] == y_true[id_mask]) & (~is_ood_flag[id_mask]))
+        total_correct = correct_id_cnt + ood_detected
+        overall_accuracy = total_correct / len(y_true)
+    else:
+        id_false_ood_rate, clean_accuracy, overall_accuracy = 0.0, 0.0, 0.0
+
+    # ---------------------------------------------------------
+    # PRINT RESULTS
+    # ---------------------------------------------------------
+    print(f"\n{'=' * 60}")
+    print(f"DETAILED TEST RESULTS")
+    print(f"{'=' * 60}")
+    print(f"Total Samples: {len(y_true)}")
+    print(f"  - Normal Pieces (0-12): {n_id}")
+    print(f"  - Anomalies (Class 17): {n_ood}")
+
+    print(f"\n1. OOD DETECTION (Goal: Catch the 17s)")
+    print(f"   Correctly Caught:     {ood_detected}/{n_ood}")
+    print(f"   OOD Recall:           {ood_recall * 100:.2f}%  (Target: >80-90%)")
+
+    print(f"\n2. CLASSIFIER SAFETY (Goal: Don't reject normal pieces)")
+    print(f"   False Rejections:     {id_rejected}/{n_id}")
+    print(f"   False Rejection Rate: {id_false_ood_rate * 100:.2f}% (Target: <5%)")
+
+    print(f"\n3. CLASSIFIER ACCURACY (Goal: Predict correct class)")
+    print(f"   Clean Accuracy:       {clean_accuracy * 100:.2f}%     (On accepted tiles)")
+
+    print(f"\n4. SYSTEM OVERALL")
+    print(f"   Overall Accuracy:     {overall_accuracy * 100:.2f}%")
+    print(f"{'=' * 60}")
+
+    return overall_accuracy
 
 def grid_search_softmax(classifier: FENClassifier, test_csv_path: str):
     """
