@@ -77,7 +77,7 @@ class FENClassifier:
         self.softmax_temperature = 5
         self.softmax_threshold = 0.15
 
-        self.ensemble_voting_threshold = 2
+        self.ensemble_voting_threshold = 3
 
         # Embedding extractor setup (Keep as is)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
