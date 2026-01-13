@@ -43,6 +43,7 @@ CLASS_MAP = {
     14: "black_rook",
     15: "black_queen",
     16: "black_king",
+    17: "OOD"     #handles hands.
 }
 DEFAULT_SPLIT = {"train": 0.8, "val": 0.1, "test": 0.1}
 
@@ -82,29 +83,6 @@ def _board_id_from_tile(image_path: Path) -> str:
     return parts
 
 
-def _gather_tiles(raw_tiles_dir: Path, embedding_dir: Optional[Path], embedding_ext: str) -> List[Dict]:
-    tiles = []
-    for image_path in sorted(raw_tiles_dir.rglob("*.png")):
-        label = _extract_label(image_path)
-        if label is None:
-            continue
-        board_id = _board_id_from_tile(image_path)
-        embedding_path = None
-        if embedding_dir:
-            candidate = embedding_dir / f"{image_path.stem}{embedding_ext}"
-            if candidate.exists():
-                embedding_path = str(candidate)
-        tiles.append(
-            {
-                "image": str(image_path),
-                "label": int(label),
-                "board_id": board_id,
-                "embedding": embedding_path,
-            }
-        )
-    if not tiles:
-        raise RuntimeError("No tiles with class labels were found. Check your raw_tiles_dir and filenames.")
-    return tiles
 
 
 def _desired_class_counts(global_counts: np.ndarray, split: Dict[str, float]) -> Dict[str, np.ndarray]:
@@ -185,6 +163,7 @@ def _group_tiles_by_board(tiles: List[Dict]) -> Dict[str, List[Dict]]:
     return boards
 
 
+
 def _compute_game_class_counts(
         games: Dict[str, List[str]],
         boards: Dict[str, List[Dict]],
@@ -258,9 +237,122 @@ def _order_groups_by_rarity(group_counts: Dict[str, np.ndarray], total_counts: n
 
     return sorted(group_counts, key=lambda g: rarity_score(group_counts[g]), reverse=True)
 
+def _collect_hand_tile_names(hands_dir: Path) -> Set[str]:
+    hands_dir = hands_dir.expanduser().resolve()
+
+    print("[DEBUG] hands_dir =", hands_dir)
+    print("[DEBUG] hands_dir exists =", hands_dir.exists(), "is_dir =", hands_dir.is_dir())
+
+    if not hands_dir.exists() or not hands_dir.is_dir():
+        print("[DEBUG] hands_dir invalid -> collected 0 hands names")
+        return set()
+
+    imgs = list(hands_dir.rglob("*.png"))
+    names = {p.name for p in imgs if p.is_file()}
+
+    print("[DEBUG] hands png files found =", len(imgs))
+    print("[DEBUG] unique hands names =", len(names))
+    print("[DEBUG] sample hands names =", list(sorted(names))[:8])
+
+    return names
+
+
+def _gather_tiles(
+    raw_tiles_dir: Path,
+    hands_dir: Path,
+    embedding_dir: Optional[Path],
+    embedding_ext: str,
+) -> List[Dict]:
+    raw_tiles_dir = raw_tiles_dir.expanduser().resolve()
+    hands_dir = hands_dir.expanduser().resolve()
+
+    print("[DEBUG] raw_tiles_dir =", raw_tiles_dir)
+    print("[DEBUG] raw_tiles_dir exists =", raw_tiles_dir.exists(), "is_dir =", raw_tiles_dir.is_dir())
+
+    hand_tile_names = _collect_hand_tile_names(hands_dir)
+
+    raw_png_paths = list(raw_tiles_dir.rglob("*.png"))
+    raw_names = {p.name for p in raw_png_paths}
+    inter = raw_names & hand_tile_names
+
+    print("[DEBUG] raw tiles png files scanned =", len(raw_png_paths))
+    print("[DEBUG] unique raw tile names =", len(raw_names))
+    print("[DEBUG] intersection(raw_names, hands_names) =", len(inter))
+    print("[DEBUG] sample intersections =", list(sorted(inter))[:8])
+
+    dropped_inside_hands = 0
+    skipped_no_label = 0
+    kept = 0
+    relabeled_to_ood = 0
+
+    tiles: List[Dict] = []
+    for image_path in sorted(raw_png_paths):
+        # Safety: if hands_dir is inside raw_tiles_dir, do NOT ingest the copies inside hands_dir
+        try:
+            image_path.resolve().relative_to(hands_dir)
+            dropped_inside_hands += 1
+            continue
+        except ValueError:
+            pass
+
+        is_hand = image_path.name in hand_tile_names
+
+        # If it's a hand tile -> force OOD label, do NOT require _class(\d+)
+        if is_hand:
+            label = 17
+            relabeled_to_ood += 1
+        else:
+            label = _extract_label(image_path)
+            if label is None:
+                skipped_no_label += 1
+                continue
+
+        board_id = _board_id_from_tile(image_path)
+
+        embedding_path = None
+        if embedding_dir:
+            candidate = embedding_dir / f"{image_path.stem}{embedding_ext}"
+            if candidate.exists():
+                embedding_path = str(candidate)
+
+        tiles.append(
+            {
+                "image": str(image_path),
+                "label": int(label),
+                "board_id": board_id,
+                "embedding": embedding_path,
+            }
+        )
+        kept += 1
+
+    print("[DEBUG] skipped_no_label =", skipped_no_label)
+    print("[DEBUG] dropped_inside_hands =", dropped_inside_hands)
+    print("[DEBUG] relabeled_to_ood =", relabeled_to_ood)
+    print("[DEBUG] kept tiles =", kept)
+
+    if not tiles:
+        raise RuntimeError(
+            "No tiles were found. Check raw_tiles_dir/hands_dir paths and naming."
+        )
+
+    return tiles
+
+
 
 def build_manifest(config_path: Path) -> Dict:
     config = _load_config(config_path)
+
+    # config is: ...\CSC-BSR\preprocessing\config.yaml
+    # so project root is: ...\CSC-BSR
+    project_root = config_path.parents[1].expanduser().resolve()
+
+    # hands is a folder in CSC-BSR root
+    hands_dir = Path(config.get("hands_dir", project_root / "hands")).expanduser().resolve()
+
+    print("[DEBUG] config_path =", config_path)
+    print("[DEBUG] project_root =", project_root)
+    print("[DEBUG] hands_dir =", hands_dir)
+
     raw_tiles_dir, data_root_path, embedding_dir_path = _resolve_paths(config)
     path_root = _compute_path_root(config_path, raw_tiles_dir, data_root_path, embedding_dir_path)
     final_size, overlap_percent, zero_padding = _parse_tile_params(config)
@@ -268,11 +360,9 @@ def build_manifest(config_path: Path) -> Dict:
     split = _validate_split(config.get("split", DEFAULT_SPLIT))
     seed = int(config.get("seed", 42))
 
-    # We track known game names to perform Game-Level splitting later
     known_game_names: List[str] = []
 
     if data_root_path:
-        # Generate tiles and discover game names
         games_found = _discover_games(data_root_path)
         known_game_names = [g_name for g_name, _, _ in games_found]
 
@@ -284,9 +374,9 @@ def build_manifest(config_path: Path) -> Dict:
             zero_padding,
         )
 
-    tiles = _gather_tiles(raw_tiles_dir, embedding_dir_path, embedding_ext)
+    # ✅ hands filtering happens BEFORE splitting and before manifest creation
+    tiles = _gather_tiles(raw_tiles_dir, hands_dir, embedding_dir_path, embedding_ext)
 
-    # Pass known_games to enable Game-Level splitting
     split_tiles = _group_stratified_split(tiles, split, known_game_names, NUM_CLASSES, seed)
 
     manifest = {
@@ -301,6 +391,7 @@ def build_manifest(config_path: Path) -> Dict:
             "tile_overlap": overlap_percent,
             "zero_padding": zero_padding,
             "path_root": str(path_root),
+            "hands_dir": str(hands_dir),
         },
         "classes": CLASS_MAP,
         "splits": {name: [] for name in split},
@@ -311,6 +402,8 @@ def build_manifest(config_path: Path) -> Dict:
         for image_path in image_paths:
             tile = tiles_by_path[image_path]
             manifest["splits"][split_name].append(_relativize_sample(tile, path_root))
+
+    print("[DEBUG] manifest split sizes:", {k: len(v) for k, v in manifest["splits"].items()})
 
     return manifest
 
@@ -440,6 +533,9 @@ class ChessSquaresDataset(Dataset):
         self.transform = transform
         self.use_embeddings = use_embeddings
         self.path_root = Path(self.data["config"].get("path_root", ".")).expanduser().resolve()
+        print("[DEBUG] loading manifest:", Path(manifest_path).resolve())
+        print("[DEBUG] samples in split", split, "=", len(self.data["splits"][split]))
+
 
     def __len__(self) -> int:
         return len(self.samples)
