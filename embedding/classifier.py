@@ -74,7 +74,7 @@ class FENClassifier:
         self.mahal_threshold = 20.0  # OOD Threshold for distance
 
         # === NEW: Add Softmax Defaults here ===
-        self.softmax_temperature = 3
+        self.softmax_temperature = 5
         self.softmax_threshold = 0.15
 
         # Embedding extractor setup (Keep as is)
