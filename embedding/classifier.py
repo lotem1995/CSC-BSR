@@ -163,24 +163,56 @@ class FENClassifier:
             self.global_embeddings.append(tile_embeddings[tile_idx].float().cpu())
             self.global_labels.append(int(labels_1d[tile_idx]))
 
-    def predict_with_ood(self, tile_embeddings: torch.Tensor, method: str = "knn") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def predict_with_ood(self, tile_embeddings: torch.Tensor,
+                         prediction_method: str = "knn",
+                         ood_method: str = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
-        Main entry point for prediction.
-        Now correctly routes to either KNN or Mahalanobis.
+        Flexible prediction pipeline allowing "Mix & Match".
+
+        Args:
+            tile_embeddings: The input embeddings [Batch, Dim]
+            prediction_method: Method to use for Class and Confidence ("knn", "mahalanobis", "softmax")
+            ood_method: Method to use for OOD Flag ("knn", "mahalanobis", "softmax")
+                        If None, defaults to the same as prediction_method.
         """
-        if method == "softmax":
-            return self.predict_softmax(tile_embeddings)
+        # If OOD method is not specified, use the prediction method (Standard behavior)
+        if ood_method is None:
+            ood_method = prediction_method
 
-        if self.normalized_embeddings is None:
-            raise ValueError("Must call update_thresholds() first")
+        # Optimization: If methods are the same, we are done!
+        if prediction_method == ood_method:
+            # We ignored the OOD return in Step 1, so we need to fetch it correctly now
+            # (Or simpler: just re-run the specific function return)
+            if prediction_method == "knn":
+                return self.predict_knn(tile_embeddings)
+            elif prediction_method == "mahalanobis":
+                return self.predict_mahalanobis(tile_embeddings)
+            elif prediction_method == "softmax":
+                return self.predict_softmax(tile_embeddings)
 
-        if method == "knn":
-            return self.predict_knn(tile_embeddings)
-        elif method == "mahalanobis":
-            # FIX: Now calling the actual Mahalanobis function
-            return self.predict_mahalanobis(tile_embeddings)
+        # --- STEP 1: Get Prediction (Class) and Confidence ---
+        if prediction_method == "knn":
+            preds, confs, _ = self.predict_knn(tile_embeddings)
+        elif prediction_method == "mahalanobis":
+            preds, confs, _ = self.predict_mahalanobis(tile_embeddings)
+        elif prediction_method == "softmax":
+            preds, confs, _ = self.predict_softmax(tile_embeddings)
         else:
-            raise ValueError(f"Unknown method: {method}")
+            raise ValueError(f"Unknown prediction method: {prediction_method}")
+
+        # --- STEP 2: Get OOD Flag (Safety Check) ---
+        # We run the OOD method just to get the boolean flag
+        if ood_method == "knn":
+            _, _, is_ood = self.predict_knn(tile_embeddings)
+        elif ood_method == "mahalanobis":
+            _, _, is_ood = self.predict_mahalanobis(tile_embeddings)
+        elif ood_method == "softmax":
+            _, _, is_ood = self.predict_softmax(tile_embeddings)
+        else:
+            raise ValueError(f"Unknown OOD method: {ood_method}")
+
+        # Combine results: Preds from Method A, OOD from Method B
+        return preds, confs, is_ood
 
     def update_thresholds(self):
         print(f"Building Global Index with {len(self.global_embeddings)} samples...")

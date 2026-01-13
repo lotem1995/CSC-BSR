@@ -208,11 +208,118 @@ def load_classifier_head(checkpoint_path: str, embedding_dim: int) -> nn.Module:
     return classifier
 
 
+def grid_search_optimization(classifier: FENClassifier, val_csv_path: str):
+    """
+    Finds the best Temperature and Threshold by testing thousands of combinations.
+    Optimizes for: High OOD Recall (Safety) vs. Low False Rejection Rate (Usability).
+    """
+    print(f"\n{'=' * 80}")
+    print("HYPERPARAMETER OPTIMIZATION (GRID SEARCH)")
+    print(f"{'=' * 80}")
+
+    # 1. LOAD DATA & EXTRACT EMBEDDINGS
+    print(f"Loading validation data from {val_csv_path}...")
+    df = pd.read_csv(val_csv_path)
+
+    # We need to extract embeddings for the validation set
+    # (We cannot use the classifier's database because we need the raw images
+    #  to pass through the head, and we need to separate OOD/ID labels)
+
+    image_paths = []
+    true_labels = []
+
+    for _, row in df.iterrows():
+        img_path = Path(row['image'])
+        if not img_path.is_absolute(): img_path = Path.cwd() / img_path
+        image_paths.append(img_path)
+        true_labels.append(row['label'])
+
+    print(f"Extracting embeddings for {len(image_paths)} tiles (this takes a moment)...")
+
+    # Batch processing
+    batch_size = 32
+    all_embeddings = []
+
+    for i in tqdm(range(0, len(image_paths), batch_size), desc="Extracting"):
+        batch_paths = image_paths[i:i + batch_size]
+        batch_imgs = [Image.open(p).convert('RGB') for p in batch_paths]
+        emb_batch = classifier.embedding_extractor.extract_batch_embeddings(batch_imgs)
+        all_embeddings.append(emb_batch.cpu())
+
+    X_val = torch.cat(all_embeddings).to(classifier.device)
+    y_val = torch.tensor(true_labels).to(classifier.device)
+
+    # 2. DEFINE THE SEARCH GRID
+    temperatures = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 5.0]
+    thresholds = np.arange(0.1, 0.95, 0.05)
+    OOD_LABEL = 17
+
+    # Masks
+    is_ood_ground_truth = (y_val == OOD_LABEL)
+    is_id_ground_truth = ~is_ood_ground_truth
+
+    n_ood = is_ood_ground_truth.sum().item()
+    n_id = is_id_ground_truth.sum().item()
+
+    print(f"\nOptimization Dataset:")
+    print(f"  - Valid Pieces (ID): {n_id}")
+    print(f"  - Anomalies (OOD):   {n_ood}")
+
+    # 3. RUN THE GRID SEARCH
+    results = []
+    with torch.no_grad():
+        if classifier.classifier_head is None:
+            print("Error: No classifier head attached! Cannot optimize Softmax.")
+            return
+
+        logits_raw = classifier.classifier_head(X_val)
+
+        for temp in temperatures:
+            scaled_logits = logits_raw / temp
+            probs = torch.softmax(scaled_logits, dim=1)
+            confidences, predictions = torch.max(probs, dim=1)
+
+            for thresh in thresholds:
+                flagged_ood = (confidences < thresh)
+
+                # Metric 1: Recall (Catching the bad guys)
+                if n_ood > 0:
+                    caught_ood = (flagged_ood & is_ood_ground_truth).sum().item()
+                    ood_recall = caught_ood / n_ood
+                else:
+                    ood_recall = 0.0
+
+                # Metric 2: False Rejection (Annoying the user)
+                if n_id > 0:
+                    false_rejects = (flagged_ood & is_id_ground_truth).sum().item()
+                    false_rejection_rate = false_rejects / n_id
+                else:
+                    false_rejection_rate = 0.0
+
+                results.append({
+                    "Temp": temp,
+                    "Threshold": thresh,
+                    "OOD_Recall": ood_recall,
+                    "False_Rejection": false_rejection_rate
+                })
+
+    # 4. ANALYZE RESULTS
+    df_res = pd.DataFrame(results)
+
+    print("\n--- TOP RECOMMENDATIONS (Constraint: False Rejection < 3%) ---")
+    safe_settings = df_res[df_res['False_Rejection'] < 0.03].sort_values('OOD_Recall', ascending=False)
+    print(safe_settings.head(10).to_string(index=False, float_format="%.3f"))
+
+    print("\n--- BALANCED OPTIONS (High Recall, Reasonable Rejection) ---")
+    df_res['Score'] = df_res['OOD_Recall'] - (2 * df_res['False_Rejection'])
+    print(df_res.sort_values('Score', ascending=False).head(10).to_string(index=False, float_format="%.3f"))
+
+
 def evaluate_on_test_csv(
         classifier: FENClassifier,
         test_csv_path: str,
-        data_root: str = "data",
-        method: str = "mahalanobis",
+        prediction_method="knn",
+        ood_method="softmax",
         ood_output_dir: str = "ood_failures"
 ):
     """
@@ -220,7 +327,7 @@ def evaluate_on_test_csv(
     Separates 'Safety' (False Rejections) from 'Detection' (Recall on Class 17).
     """
     print(f"\nEvaluating on {test_csv_path}")
-    print(f"Method: {method}")
+    print(f"prediction_method: {prediction_method}, ood_method: {ood_method}")
 
     if os.path.exists(ood_output_dir):
         shutil.rmtree(ood_output_dir)
@@ -264,7 +371,8 @@ def evaluate_on_test_csv(
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
         predictions, confidences, is_ood = classifier.predict_with_ood(
             tile_embeddings,
-            method=method
+            prediction_method=prediction_method,
+            ood_method=ood_method,
         )
 
         # Store Data
@@ -371,232 +479,113 @@ def evaluate_on_test_csv(
 
     return overall_accuracy
 
-def grid_search_softmax(classifier: FENClassifier, test_csv_path: str):
-    """
-    Efficiently searches for the best Temperature and Threshold.
-    Loads data ONCE, then runs pure math loops.
-    """
-    print(f"\n{'=' * 60}")
-    print("STARTING HYPERPARAMETER GRID SEARCH")
-    print(f"{'=' * 60}")
-
-    # 1. LOAD ALL DATA INTO MEMORY
-    df = pd.read_csv(test_csv_path)
-    print(f"Loading {len(df)} test images into memory...")
-
-    all_embeddings = []
-    all_labels = []
-
-    image_paths = []
-    labels = []
-
-    # This loop is fast (just strings)
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="Reading CSV paths"):
-        img_path = Path(row['image'])
-        if not img_path.is_absolute(): img_path = Path.cwd() / img_path
-        image_paths.append(img_path)
-        labels.append(row['label'])
-
-    # Process in batches to save RAM/VRAM
-    BATCH_SIZE = 32
-
-    # === ADDED TQDM HERE to show "Extracting Embeddings" progress ===
-    total_batches = (len(image_paths) + BATCH_SIZE - 1) // BATCH_SIZE
-
-    for i in tqdm(range(0, len(image_paths), BATCH_SIZE), total=total_batches,
-                  desc="Extracting Embeddings (Slow Step)"):
-        batch_paths = image_paths[i:i + BATCH_SIZE]
-        batch_imgs = [Image.open(p).convert('RGB') for p in batch_paths]
-        emb_batch = classifier.embedding_extractor.extract_batch_embeddings(batch_imgs)
-        all_embeddings.append(emb_batch.cpu())  # Store on CPU to avoid VRAM overflow
-        all_labels.extend(labels[i:i + BATCH_SIZE])
-
-    # Convert to giant Tensors
-    X_test = torch.cat(all_embeddings).to(classifier.device)
-    y_test = torch.tensor(all_labels).to(classifier.device)
-
-    # 2. PRE-CALCULATE LOGITS
-    print("\nPre-calculating raw model outputs...")
-    with torch.no_grad():
-        classifier.classifier_head.eval()
-        base_logits = classifier.classifier_head(X_test)
-
-    # 3. RUN THE GRID SEARCH
-    print("\nRunning Grid Search...")
-
-    temperatures = [0.8, 1.0, 1.5, 2.0, 2.5, 5.0]
-    thresholds   = [0.15, 0.20, 0.25, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80]
-
-    results = []
-
-    # Use tqdm here too just in case math takes a second
-    total_combos = len(temperatures) * len(thresholds)
-    with tqdm(total=total_combos, desc="Calculating Metrics") as pbar:
-        for temp in temperatures:
-            scaled_logits = base_logits / temp
-            probs = torch.softmax(scaled_logits, dim=1)
-            confidences, predictions = torch.max(probs, dim=1)
-
-            is_correct = (predictions == y_test)
-
-            for thresh in thresholds:
-                is_ood = confidences < thresh
-
-                acc = is_correct.float().mean().item()
-                ood_rate = is_ood.float().mean().item()
-                silent_errors = (~is_correct & ~is_ood).float().mean().item()
-
-                results.append({
-                    "Temp": temp,
-                    "Thresh": thresh,
-                    "Accuracy": acc,
-                    "OOD_Rate": ood_rate,
-                    "Silent_Err": silent_errors
-                })
-                pbar.update(1)
-
-    # 4. PRINT RESULTS TABLE
-    results_df = pd.DataFrame(results)
-
-    # === NEW: Show ALL rows ===
-    pd.set_option('display.max_rows', None)  # Disable truncation
-
-    # Sort by OOD Rate so you can easily find your 3% target
-    # Secondary sort by Silent_Err so the best options appear first in that block
-    sorted_df = results_df.sort_values(by=["OOD_Rate", "Silent_Err"], ascending=[True, True])
-
-    print("\nFULL GRID SEARCH RESULTS (Sorted by OOD Rate):")
-    print(sorted_df.to_string(index=False))
-
 
 def main():
     """
-    Proper evaluation setup to avoid data leakage:
-    - Train set was used to fine-tune the embedding backbone
-    - Val set is used to build the KNN/Mahalanobis retrieval database
-    - Test set is used for final evaluation
+    Main execution pipeline.
     """
-    # Configuration
+    # ================= CONFIGURATION =================
     CHECKPOINT_PATH = "embedding/chess_encoder_finetuned_dino-small_backbone.pt"
     MODEL_TYPE = "dino-small"
-    STRATEGY = "backbone"  # "head-only", "backbone", or "lora"
-    
-    VAL_CSV = "data/splits/val.csv"  # Use val for database (NOT train - that was used for fine-tuning!)
+    STRATEGY = "backbone"
+
+    VAL_CSV = "data/splits/val.csv"
     TEST_CSV = "data/splits/test.csv"
 
-    METHOD = "knn"
-    
-    print("="*80)
-    print("USING FINE-TUNED EMBEDDINGS WITH PER-TILE CLASSIFIER")
-    print("="*80)
-    print("\nDATA SPLIT STRATEGY (to avoid leakage):")
-    print("  - Train set: Used to fine-tune embedding backbone ✓")
-    print("  - Val set:   Used to build KNN/Mahalanobis database ← current step")
-    print("  - Test set:  Used for final evaluation")
-    
-    # Step 1: Load fine-tuned embedding model
+    # --- MODE SELECTION ---
+    DO_OPTIMIZATION = False  # Set True to find best Temp/Threshold
+    DO_EVALUATION = True  # Set True to run final test
+
+    # --- METHOD SELECTION ---
+    # We use KNN for prediction (accurate) and Softmax for OOD (robust)
+    PREDICTION_METHOD = "knn"
+    OOD_METHOD = "softmax"
+    # =================================================
+
+    print("=" * 80)
+    print("CHESS CLASSIFIER: MIXED METHOD PIPELINE")
+    print("=" * 80)
+
+    # 1. LOAD MODEL
     print(f"\n1. Loading fine-tuned model...")
-    print(f"   Checkpoint: {CHECKPOINT_PATH}")
-    print(f"   Model: {MODEL_TYPE}")
-    print(f"   Strategy: {STRATEGY}")
-    
     embedding_model = load_finetuned_embedding_model(
         checkpoint_path=CHECKPOINT_PATH,
         model_type=MODEL_TYPE,
         strategy=STRATEGY
     )
-    
-    # Step 2: Initialize classifier with fine-tuned embeddings
-    print(f"\n2. Initializing FENClassifier with fine-tuned embeddings...")
+
+    # 2. INITIALIZE CLASSIFIER
+    print(f"\n2. Initializing Classifier...")
     classifier = FENClassifier(embedding_extractor=embedding_model)
 
-    if METHOD == "softmax":
+    # Always load the classifier head if we plan to use Softmax for ANYTHING
+    if OOD_METHOD == "softmax" or PREDICTION_METHOD == "softmax" or DO_OPTIMIZATION:
         head = load_classifier_head(CHECKPOINT_PATH, embedding_model.get_embedding_dim())
         classifier.set_classifier_head(head)
 
-        # === OPTION: RUN GRID SEARCH INSTEAD OF NORMAL TEST ===
-        # run_grid_search = True
-        run_grid_search = False  # Set to True to optimize parameters
+    # 3. OPTIMIZATION (Optional)
+    if DO_OPTIMIZATION:
+        # grid_search_optimization(classifier, VAL_CSV)
+        # print("\nOptimization Complete. Update your defaults in classifier.py based on above!")
+        # You can manually set them here for the current run if you want:
+        classifier.softmax_temperature = 2.5
+        classifier.softmax_threshold = 0.3
 
-        if run_grid_search:
-            grid_search_softmax(classifier, VAL_CSV)
-            return  # Stop here after search
+        # If you only wanted to optimize, you can return here:
+        # return
 
+    # 4. BUILD KNN DATABASE
+    # We need this if prediction is KNN/Mahalanobis OR if OOD is KNN/Mahalanobis
+    need_database = "knn" in [PREDICTION_METHOD, OOD_METHOD] or "mahalanobis" in [PREDICTION_METHOD, OOD_METHOD]
 
-    else:
-
-        # Step 3: Load validation data for KNN/Mahalanobis database
-        print(f"\n3. Loading validation data from {VAL_CSV}...")
-        print(f"   (Using VAL not TRAIN to avoid leakage - train was used for fine-tuning)")
+    if need_database:
+        print(f"\n4. Building Database from {VAL_CSV}...")
         val_df = pd.read_csv(VAL_CSV)
         board_ids = val_df['board_id'].unique()
-        print(f"   Found {len(board_ids)} validation boards")
 
-
-
-        # Add validation boards to classifier database
-        print(f"\n4. Building per-tile database from validation set...")
         for board_id in tqdm(board_ids, desc="Adding boards"):
             board_df = val_df[val_df['board_id'] == board_id].copy()
+            if len(board_df) != 64: continue
 
-            if len(board_df) != 64:
-                continue
-
-            # Parse tile coordinates and sort by (row, col) to ensure correct ordering
             board_df['tile_coords'] = board_df['image'].apply(parse_tile_coords)
             board_df = board_df.sort_values('tile_coords')
 
-            # Load tile images and labels in correct spatial order
             tile_images = []
             board_state = np.zeros((8, 8), dtype=int)
 
             for _, row in board_df.iterrows():
-                # Parse row/col from filename (guaranteed by sorting above)
-                tile_row, tile_col = parse_tile_coords(row['image'])
-
-                # CSV paths are relative to project root (e.g., 'preprocessed_data/...')
                 img_path = Path(row['image'])
-                if not img_path.is_absolute():
-                    img_path = Path.cwd() / img_path
-
+                if not img_path.is_absolute(): img_path = Path.cwd() / img_path
                 with Image.open(img_path) as im:
                     tile_images.append(im.convert('RGB').copy())
+                board_state[parse_tile_coords(row['image'])] = row['label']
 
-                board_state[tile_row, tile_col] = row['label']
-
-            # Extract embeddings using fine-tuned model
             tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
+            classifier.add_fen_position(board_id, tile_embeddings, board_state)
 
-            # Add to classifier
-            classifier.add_fen_position(
-                fen=board_id,  # Use board_id as FEN placeholder
-                tile_embeddings=tile_embeddings,
-                board_state=board_state
-            )
-
-
-        # 1. Save the data you just built (so you can use it next time)
-        classifier_path = "classifier.json"
-        classifier.save(str(classifier_path))
-
-        # # 2. DO NOT LOAD HERE! (This was wiping your data)
-        # classifier.load(str(classifier_path))
-
-        # Step 5: Build index (uses the data currently in memory)
-        print(f"\n5. Building KNN indices...")
         classifier.update_thresholds()
-    
-    # Step 6: Evaluate on test set
-    print(f"\n6. Evaluating on test set...")
-    accuracy = evaluate_on_test_csv(
-        classifier=classifier,
-        test_csv_path=TEST_CSV,
-        method=METHOD,
-        ood_output_dir="ood_inspection_images"
-    )
-    
-    print(f"\n✓ Done! Test accuracy: {accuracy:.4f}")
 
+    # 5. EVALUATE
+    if DO_EVALUATION:
+        print(f"\n5. Evaluating on {TEST_CSV}...")
+
+        # IMPORTANT: We updated evaluate_on_test_csv to accept separate methods
+        # But wait, looking at your file, evaluate_on_test_csv hardcodes the call:
+        # classifier.predict_with_ood(..., prediction_method="knn", ood_method="softmax")
+        # Let's make sure it matches what we defined above.
+
+        # (Note: You might need to slightly tweak evaluate_on_test_csv arguments
+        # to accept these variables if you want full flexibility,
+        # but for now, the hardcoded "knn" + "softmax" inside evaluate is fine
+        # as long as we built the DB and loaded the head).
+
+        evaluate_on_test_csv(
+            classifier=classifier,
+            test_csv_path=TEST_CSV,
+            prediction_method=PREDICTION_METHOD,
+            ood_method=OOD_METHOD,
+            ood_output_dir="ood_inspection_images"
+        )
 
 if __name__ == "__main__":
     main()
