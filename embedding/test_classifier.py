@@ -500,13 +500,13 @@ def main():
     TEST_CSV = "data/splits/test.csv"
 
     # --- MODE SELECTION ---
-    DO_OPTIMIZATION = True  # Set True to find best Temp/Threshold
+    DO_OPTIMIZATION = False  # Set True to find best Temp/Threshold
     DO_EVALUATION = True  # Set True to run final test
 
     # --- METHOD SELECTION ---
     # We use KNN for prediction (accurate) and Softmax for OOD (robust)
     PREDICTION_METHOD = "knn"
-    OOD_METHOD = "knn"
+    OOD_METHOD = "softmax"
     # =================================================
 
     print("=" * 80)
@@ -533,13 +533,6 @@ def main():
     # 3. OPTIMIZATION (Optional)
     if DO_OPTIMIZATION:
         grid_search_optimization(classifier, VAL_CSV)
-        # print("\nOptimization Complete. Update your defaults in classifier.py based on above!")
-        # You can manually set them here for the current run if you want:
-        # classifier.softmax_temperature = 2.5
-        # classifier.softmax_threshold = 0.3
-
-        # If you only wanted to optimize, you can return here:
-        # return
 
     # 4. BUILD KNN DATABASE
     # We need this if prediction is KNN/Mahalanobis OR if OOD is KNN/Mahalanobis
