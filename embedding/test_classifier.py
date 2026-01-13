@@ -527,7 +527,7 @@ def main():
     classifier = FENClassifier(embedding_extractor=embedding_model)
 
     # Always load the classifier head if we plan to use Softmax for ANYTHING
-    if OOD_METHOD == "softmax" or PREDICTION_METHOD == "softmax" or DO_OPTIMIZATION:
+    if OOD_METHOD == "softmax" or PREDICTION_METHOD == "softmax" or DO_OPTIMIZATION or PREDICTION_METHOD == "ensemble":
         head = load_classifier_head(CHECKPOINT_PATH, embedding_model.get_embedding_dim())
         classifier.set_classifier_head(head)
 
