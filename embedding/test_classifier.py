@@ -246,8 +246,8 @@ def grid_search_optimization(classifier: FENClassifier, val_csv_path: str):
     y_val = torch.tensor(true_labels).to(classifier.device)
 
     # 2. DEFINE THE SEARCH GRID
-    temperatures = [0.5, 0.8, 1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 5.0]
-    thresholds = np.arange(0.1, 0.95, 0.05)
+    temperatures = np.arange(0.1, 10.0, 0.1)
+    thresholds = np.arange(0.1, 0.95, 0.01)
     OOD_LABEL = 17
 
     # Masks
@@ -497,7 +497,7 @@ def main():
     TEST_CSV = "data/splits/test.csv"
 
     # --- MODE SELECTION ---
-    DO_OPTIMIZATION = False  # Set True to find best Temp/Threshold
+    DO_OPTIMIZATION = True  # Set True to find best Temp/Threshold
     DO_EVALUATION = True  # Set True to run final test
 
     # --- METHOD SELECTION ---
