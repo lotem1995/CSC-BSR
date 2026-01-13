@@ -221,10 +221,6 @@ def grid_search_optimization(classifier: FENClassifier, val_csv_path: str):
     print(f"Loading validation data from {val_csv_path}...")
     df = pd.read_csv(val_csv_path)
 
-    # We need to extract embeddings for the validation set
-    # (We cannot use the classifier's database because we need the raw images
-    #  to pass through the head, and we need to separate OOD/ID labels)
-
     image_paths = []
     true_labels = []
 
@@ -306,14 +302,22 @@ def grid_search_optimization(classifier: FENClassifier, val_csv_path: str):
     # 4. ANALYZE RESULTS
     df_res = pd.DataFrame(results)
 
-    print("\n--- TOP RECOMMENDATIONS (Constraint: False Rejection < 3%) ---")
-    safe_settings = df_res[df_res['False_Rejection'] < 0.03].sort_values('OOD_Recall', ascending=False)
-    print(safe_settings.head(10).to_string(index=False, float_format="%.3f"))
+    print("\n--- 1. SAFE BETS (Constraint: False Rejection < 1%) ---")
+    safe_settings = df_res[df_res['False_Rejection'] < 0.01].sort_values('OOD_Recall', ascending=False)
+    print(safe_settings.head(5).to_string(index=False, float_format="%.4f"))
 
-    print("\n--- BALANCED OPTIONS (High Recall, Reasonable Rejection) ---")
-    df_res['Score'] = df_res['OOD_Recall'] - (2 * df_res['False_Rejection'])
-    print(df_res.sort_values('Score', ascending=False).head(10).to_string(index=False, float_format="%.3f"))
+    # --- NEW CALCULATION HERE ---
+    print("\n--- 2. REAL-WORLD OPTIMIZATION (Assuming 1% OOD Prevalence) ---")
+    print("Maximizing: 0.99 * (1 - False_Rejection) + 0.01 * Recall")
 
+    # Formula explanation:
+    # We care 99x more about False Rejection than Recall, because valid pieces are 99x more common.
+    df_res['Projected_Accuracy'] = (0.99 * (1 - df_res['False_Rejection'])) + (0.01 * df_res['OOD_Recall'])
+
+    real_world_settings = df_res.sort_values('Projected_Accuracy', ascending=False)
+    print(real_world_settings.head(10).to_string(index=False, float_format="%.4f"))
+
+    return real_world_settings
 
 def evaluate_on_test_csv(
         classifier: FENClassifier,
