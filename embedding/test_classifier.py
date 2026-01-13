@@ -503,7 +503,7 @@ def main():
     # --- METHOD SELECTION ---
     # We use KNN for prediction (accurate) and Softmax for OOD (robust)
     PREDICTION_METHOD = "knn"
-    OOD_METHOD = "softmax"
+    OOD_METHOD = "knn"
     # =================================================
 
     print("=" * 80)
