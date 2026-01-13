@@ -324,19 +324,30 @@ def evaluate_on_test_csv(
         test_csv_path: str,
         prediction_method="knn",
         ood_method="softmax",
-        ood_output_dir: str = "ood_failures"
+        ood_output_dir: str = "ood_inspection_images"
 ):
     """
     Evaluate the classifier with detailed OOD metrics.
-    Separates 'Safety' (False Rejections) from 'Detection' (Recall on Class 17).
+    Saves images into categorized folders for easier inspection.
     """
     print(f"\nEvaluating on {test_csv_path}")
     print(f"prediction_method: {prediction_method}, ood_method: {ood_method}")
 
+    # --- SETUP FOLDERS ---
+    # Clear previous run
     if os.path.exists(ood_output_dir):
         shutil.rmtree(ood_output_dir)
-    os.makedirs(ood_output_dir)
-    print(f"Saving OOD inspection images to: {ood_output_dir}/")
+
+    # Create main directory and sub-directories
+    dir_false_reject = os.path.join(ood_output_dir, "false_rejections")  # Valid pieces flagged as OOD
+    dir_missed_ood = os.path.join(ood_output_dir, "missed_ood")  # OOD pieces that sneaked in
+    dir_correct_ood = os.path.join(ood_output_dir, "correct_ood")  # OOD pieces correctly caught
+
+    os.makedirs(dir_false_reject)
+    os.makedirs(dir_missed_ood)
+    os.makedirs(dir_correct_ood)
+
+    print(f"Saving inspection images to: {ood_output_dir}/")
 
     # Load test CSV
     df = pd.read_csv(test_csv_path)
@@ -384,33 +395,29 @@ def evaluate_on_test_csv(
         all_predictions.extend(predictions)
         all_is_ood.extend(is_ood)
 
-        # --- SAVE FAILURE IMAGES ---
-        # We save images if:
-        # 1. False Rejection: It was valid (0-12), but we flagged it as OOD.
-        # 2. Missed OOD: It was OOD (17), but we let it pass.
+        # --- SAVE IMAGES BY CATEGORY ---
+        for idx in range(64):
+            t_lbl = true_labels[idx]
+            p_lbl = predictions[idx]
+            flagged = is_ood[idx]
 
-        # Check if we need to inspect this board
-        has_false_rejection = np.any((np.array(true_labels) != OOD_LABEL) & is_ood)
-        has_missed_ood = np.any((np.array(true_labels) == OOD_LABEL) & (~is_ood))
+            # 1. FALSE REJECTION: Valid piece (0-12) flagged as OOD (Bad for User)
+            if (t_lbl != OOD_LABEL) and flagged:
+                fname = f"FalseReject_Board{board_id}_tile{idx}_True{t_lbl}_Pred{p_lbl}.png"
+                save_path = os.path.join(dir_false_reject, fname)
+                tile_images[idx].resize((224, 224)).save(save_path)
 
-        if has_false_rejection or has_missed_ood:
-            for idx in range(64):
-                t_lbl = true_labels[idx]
-                p_lbl = predictions[idx]
-                flagged = is_ood[idx]
+            # 2. MISSED OOD: OOD piece (17) passed as valid (Bad for Safety)
+            elif (t_lbl == OOD_LABEL) and not flagged:
+                fname = f"MissedOOD_Board{board_id}_tile{idx}_Pred{p_lbl}_Conf{confidences[idx]:.2f}.png"
+                save_path = os.path.join(dir_missed_ood, fname)
+                tile_images[idx].resize((224, 224)).save(save_path)
 
-                # Logic to name files helpfully
-                if (t_lbl != OOD_LABEL) and flagged:
-                    # Case A: False Rejection (Bad for user experience)
-                    fname = f"FalseReject_{board_id}_tile{idx}_True{t_lbl}.png"
-                    save_path = os.path.join(ood_output_dir, fname)
-                    tile_images[idx].resize((224, 224)).save(save_path)
-
-                elif (t_lbl == OOD_LABEL) and not flagged:
-                    # Case B: Missed OOD (Bad for safety)
-                    fname = f"MissedOOD_{board_id}_tile{idx}_Pred{p_lbl}.png"
-                    save_path = os.path.join(ood_output_dir, fname)
-                    tile_images[idx].resize((224, 224)).save(save_path)
+            # 3. CORRECT OOD: OOD piece (17) correctly flagged (Good!)
+            elif (t_lbl == OOD_LABEL) and flagged:
+                fname = f"CorrectOOD_Board{board_id}_tile{idx}_Pred{p_lbl}_Conf{confidences[idx]:.2f}.png"
+                save_path = os.path.join(dir_correct_ood, fname)
+                tile_images[idx].resize((224, 224)).save(save_path)
 
     # ---------------------------------------------------------
     # CALCULATE METRICS
@@ -423,7 +430,7 @@ def evaluate_on_test_csv(
     ood_mask = (y_true == OOD_LABEL)  # The "Real" 17s
     id_mask = ~ood_mask  # The Normal pieces (0-12)
 
-    # --- 1. OOD Detection Metrics (Ability to catch Class 17) ---
+    # --- 1. OOD Detection Metrics ---
     n_ood = np.sum(ood_mask)
     if n_ood > 0:
         ood_detected = np.sum(is_ood_flag[ood_mask])
@@ -431,14 +438,12 @@ def evaluate_on_test_csv(
     else:
         ood_detected, ood_recall = 0, 0.0
 
-    # --- 2. ID Classification Metrics (Ability to classify 0-12) ---
+    # --- 2. ID Classification Metrics ---
     n_id = np.sum(id_mask)
     if n_id > 0:
-        # False Rejection Rate: How many valid pieces did we accidentally reject?
         id_rejected = np.sum(is_ood_flag[id_mask])
         id_false_ood_rate = id_rejected / n_id
 
-        # Clean Accuracy: Accuracy ONLY on tiles we accepted
         accepted_mask = id_mask & (~is_ood_flag)
         n_accepted = np.sum(accepted_mask)
 
@@ -448,8 +453,6 @@ def evaluate_on_test_csv(
         else:
             clean_accuracy = 0.0
 
-        # Overall Strict Accuracy
-        # Correct = (ID & Accepted & Correct) + (OOD & Rejected)
         correct_id_cnt = np.sum((y_pred[id_mask] == y_true[id_mask]) & (~is_ood_flag[id_mask]))
         total_correct = correct_id_cnt + ood_detected
         overall_accuracy = total_correct / len(y_true)
@@ -468,14 +471,14 @@ def evaluate_on_test_csv(
 
     print(f"\n1. OOD DETECTION (Goal: Catch the 17s)")
     print(f"   Correctly Caught:     {ood_detected}/{n_ood}")
-    print(f"   OOD Recall:           {ood_recall * 100:.2f}%  (Target: >80-90%)")
+    print(f"   OOD Recall:           {ood_recall * 100:.2f}%")
 
     print(f"\n2. CLASSIFIER SAFETY (Goal: Don't reject normal pieces)")
     print(f"   False Rejections:     {id_rejected}/{n_id}")
-    print(f"   False Rejection Rate: {id_false_ood_rate * 100:.2f}% (Target: <5%)")
+    print(f"   False Rejection Rate: {id_false_ood_rate * 100:.2f}%")
 
     print(f"\n3. CLASSIFIER ACCURACY (Goal: Predict correct class)")
-    print(f"   Clean Accuracy:       {clean_accuracy * 100:.2f}%     (On accepted tiles)")
+    print(f"   Clean Accuracy:       {clean_accuracy * 100:.2f}%")
 
     print(f"\n4. SYSTEM OVERALL")
     print(f"   Overall Accuracy:     {overall_accuracy * 100:.2f}%")
