@@ -74,8 +74,8 @@ class FENClassifier:
         self.mahal_threshold = 20.0  # OOD Threshold for distance
 
         # === NEW: Add Softmax Defaults here ===
-        self.softmax_temperature = 2.5
-        self.softmax_threshold = 0.30
+        self.softmax_temperature = 3
+        self.softmax_threshold = 0.15
 
         # Embedding extractor setup (Keep as is)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

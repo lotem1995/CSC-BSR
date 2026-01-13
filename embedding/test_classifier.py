@@ -497,7 +497,7 @@ def main():
     TEST_CSV = "data/splits/test.csv"
 
     # --- MODE SELECTION ---
-    DO_OPTIMIZATION = True  # Set True to find best Temp/Threshold
+    DO_OPTIMIZATION = False  # Set True to find best Temp/Threshold
     DO_EVALUATION = True  # Set True to run final test
 
     # --- METHOD SELECTION ---
