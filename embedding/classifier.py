@@ -159,21 +159,10 @@ class FENClassifier:
         # Iterate over all 64 tiles in this new board
         for tile_idx in range(64):
             # ADD TO GLOBAL LIST
-            # We treat every tile identically, regardless of its position (A1 vs E4)
+            if int(labels_1d[tile_idx]) == 17: # it is an ood
+                continue
             self.global_embeddings.append(tile_embeddings[tile_idx].float().cpu())
             self.global_labels.append(int(labels_1d[tile_idx]))
-
-    def add_fen_from_image(self, fen: str, board_image: Image.Image, board_state: Optional[np.ndarray] = None):
-        """
-        Add a FEN position by extracting embeddings from a board image.
-        
-        Args:
-            fen: FEN string
-            board_image: PIL Image of full chess board
-            board_state: Optional [8, 8] array with class labels for each square
-        """
-        tile_embeddings = self.extract_board_embeddings(board_image)
-        self.add_fen_position(fen, tile_embeddings, board_state)
 
     def predict_with_ood(self, tile_embeddings: torch.Tensor, method: str = "knn") -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
