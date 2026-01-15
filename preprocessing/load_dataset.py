@@ -87,7 +87,7 @@ def paint_camel():
     print(art)
 
 
-def get_train_dataloader(batch_size, num_workers, resize=224):
+def get_train_dataloader(batch_size, num_workers):
     # --- CONFIGURATION ---
     rotation_jitter = 5  # Change this number to increase/decrease the "wiggle"
 
@@ -100,7 +100,7 @@ def get_train_dataloader(batch_size, num_workers, resize=224):
     ])
     train_transforms = transforms.Compose([
         # we simply force the image to the correct size for the model.
-        transforms.Resize((resize, resize)),
+        transforms.Resize((224, 224)),
         # 1. Geometric Flips
         transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomVerticalFlip(p=0.5),

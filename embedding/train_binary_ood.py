@@ -4,6 +4,7 @@ import argparse
 import torch
 import torch.nn as nn
 import numpy as np
+from PIL import Image  # Added for _to_batch
 from tqdm import tqdm
 from typing import Tuple, Dict
 from sklearn.metrics import accuracy_score, recall_score, precision_score, confusion_matrix
@@ -13,7 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-# Import your corrected loaders
+# Import your loaders
 from preprocessing.load_dataset import get_train_dataloader, get_val_dataloader
 from embedding.dinov2 import DINOv2Embedding
 from loguru import logger
@@ -34,6 +35,7 @@ class BinaryDINOBackboneFineTuner:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dino = dino_model
         self.model = dino_model.model
+        self.transform = dino_model.transform  # Store transform for _to_batch
 
         embedding_dim = dino_model.get_embedding_dim()
 
@@ -54,18 +56,39 @@ class BinaryDINOBackboneFineTuner:
             weight_decay=0.01
         )
 
-        # Since get_train_dataloader balances the batch (50% OOD),
-        # we treat classes equally (1.0).
-        self.criterion = nn.CrossEntropyLoss(weight=torch.tensor([1.0, 1.0]).to(self.device))
+        # Weighted Loss: OOD (Class 1) is rare (~7%), so we weight it heavily (8.0)
+        ood_weight = 8.0
+        weights = torch.tensor([1.0, ood_weight]).to(self.device)
+        self.criterion = nn.CrossEntropyLoss(weight=weights)
 
-        print(f"Initialized Binary Tuner on {self.device}")
+        print(f"Initialized Binary Tuner on {self.device} with OOD Weight: {ood_weight}")
+
+    def _to_batch(self, image_tensors):
+        """
+        Robustly handles image resizing.
+        Takes whatever the DataLoader gives (e.g., 224x224 Tensors),
+        converts back to PIL, and applies DINO's specific transform (518x518).
+        """
+        images = []
+        # 1. Convert Tensor back to PIL
+        for img_tensor in image_tensors:
+            img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
+            images.append(Image.fromarray(img_np))
+
+        # 2. Apply DINO's transform (Resizes to 518, Normalizes, etc.)
+        batch_x = []
+        for img in images:
+            x = self.transform(img).unsqueeze(0)
+            batch_x.append(x)
+
+        # 3. Return correct tensor on device
+        return torch.cat(batch_x, dim=0).to(self.device)
 
     def _get_binary_labels(self, raw_labels):
         """
         Map {0..16} -> 0 (ID)
         Map {17}    -> 1 (OOD)
         """
-        # Create binary mask: 1 if label is 17, else 0
         binary_labels = (raw_labels == 17).long()
         return binary_labels.to(self.device)
 
@@ -73,15 +96,11 @@ class BinaryDINOBackboneFineTuner:
         self.model.train()
         self.classifier.train()
 
-        # Image is already a tensor from your get_train_dataloader
-        x = batch["image"].to(self.device)
+        # [CHANGED] Use _to_batch to handle resizing automatically
+        x = self._to_batch(batch["image"])
         labels = self._get_binary_labels(batch["label"])
 
         # Forward Pass
-        # DINO expects specific normalization, but with fine-tuning backbone + augmentation
-        # standard 0-1 tensors often work well enough.
-        # Ideally, we'd add DINO normalization in the dataset transform,
-        # but the backbone will adapt to the current distribution.
         feats = self.model(x)
         logits = self.classifier(feats)
 
@@ -98,7 +117,8 @@ class BinaryDINOBackboneFineTuner:
         self.model.eval()
         self.classifier.eval()
 
-        x = batch["image"].to(self.device)
+        # [CHANGED] Use _to_batch here too
+        x = self._to_batch(batch["image"])
         labels = self._get_binary_labels(batch["label"])
 
         feats = self.model(x)
@@ -124,7 +144,7 @@ class BinaryDINOBackboneFineTuner:
 
 def train_binary_ood(
         epochs: int = 5,
-        batch_size: int = 32,  # Larger batch size since we use sampling
+        batch_size: int = 8,  # Kept small (8) because 518px images use a lot of VRAM
         dino_size: str = "small",
         num_workers: int = 2
 ):
@@ -133,9 +153,13 @@ def train_binary_ood(
     dino_model = DINOv2Embedding(model_size=dino_size)
     trainer = BinaryDINOBackboneFineTuner(dino_model)
 
-    # 2. Data Loaders (Using your corrected loader)
+    # 2. Data Loaders
+    # NOTE: We can now use standard 224 resize in loader, saving memory/time
+    # The trainer's _to_batch will handle the upscale to 518.
     logger.info("Loading Datasets via get_train_dataloader...")
-    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers, resize=518)
+
+    # Passing resize=224 is safe now!
+    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers)  # default resize is 224
     val_loader = get_val_dataloader(batch_size=batch_size, num_workers=num_workers)
 
     # 3. Training Loop
@@ -191,8 +215,8 @@ def train_binary_ood(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dino-size", default="small", choices=["small", "base"])
-    parser.add_argument("--epochs", type=int, default=5)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=2)
 
     args = parser.parse_args()
