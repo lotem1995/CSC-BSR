@@ -143,8 +143,7 @@ class FENClassifier:
         # 4. Set Transform (Uses DINO's native transform logic but forced to 518)
         self.binary_transform = transforms.Compose([
             transforms.Resize((518, 518)),
-            transforms.ToTensor(),
-            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            transforms.ToTensor()
         ])
         self.has_binary_model = True
         print("✅ Binary OOD Model attached successfully.")
