@@ -14,22 +14,23 @@ BINARY_GUARD_PATH = BASE_DIR / "binary_ood_dino_small_epoch3.pt"
 CLASSIFIER_DB_PATH = BASE_DIR / "classifier_dino_small.pt"
 
 # --- CONFIGURATION: CLASS MAPPING ---
-# Maps Internal Model IDs -> Your Required Output Encoding [0-14]
+# LEFT SIDE: Your Model's IDs (from CLASS_MAP)
+# RIGHT SIDE: The Required Output IDs (0=WP, 1=WR... 12=Empty)
 INTERNAL_TO_OUTPUT = {
-    3: 0,  # P (White Pawn) -> 0
-    5: 1,  # R (White Rook) -> 1
-    2: 2,  # N (White Knight) -> 2
-    0: 3,  # B (White Bishop) -> 3
-    4: 4,  # Q (White Queen) -> 4
-    1: 5,  # K (White King) -> 5
-    10: 6,  # p (Black Pawn) -> 6
-    12: 7,  # r (Black Rook) -> 7
-    9: 8,  # n (Black Knight) -> 8
-    6: 9,  # b (Black Bishop) -> 9
-    11: 10,  # q (Black Queen) -> 10
-    8: 11,  # k (Black King) -> 11
-    7: 12,  # empty -> 12
-    17: 13  # Internal OOD -> 13
+    0: 12,  # Model: empty        -> Target: 12
+    1: 0,  # Model: white_pawn   -> Target: 0
+    2: 2,  # Model: white_knight -> Target: 2 (Match!)
+    3: 3,  # Model: white_bishop -> Target: 3 (Match!)
+    4: 1,  # Model: white_rook   -> Target: 1
+    5: 4,  # Model: white_queen  -> Target: 4
+    6: 5,  # Model: white_king   -> Target: 5
+    11: 6,  # Model: black_pawn   -> Target: 6
+    12: 8,  # Model: black_knight -> Target: 8
+    13: 9,  # Model: black_bishop -> Target: 9
+    14: 7,  # Model: black_rook   -> Target: 7
+    15: 10,  # Model: black_queen  -> Target: 10
+    16: 11,  # Model: black_king   -> Target: 11
+    17: 13  # Model: OOD          -> Target: 13
 }
 
 # --- SETUP IMPORTS ---
@@ -145,15 +146,14 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
     internal_preds[is_ood] = 17
 
     # 6. Apply Class Mapping (Internal -> Target 0-14)
+    # This translates your CLASS_MAP IDs to the required Output IDs
     final_preds = np.array([INTERNAL_TO_OUTPUT.get(p, 13) for p in internal_preds])
-
-    print(torch.from_numpy(final_preds).long().cpu().view(8, 8))
 
     # 7. Return Tensor (8x8)
     return torch.from_numpy(final_preds).long().cpu().view(8, 8)
 
 
-# --- UPDATED TEST BLOCK ---
+# --- TEST BLOCK ---
 if __name__ == "__main__":
     target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_000616.jpg"
     print(f"Looking for image at: {target_image}")
@@ -165,12 +165,11 @@ if __name__ == "__main__":
                 real_img_np = np.array(img.convert("RGB"))
 
             result_tensor = predict_board(real_img_np)
-            print(result_tensor)
 
             print("\n✓ Prediction Successful!")
             print(f"Output Shape: {result_tensor.shape}")
 
-            # --- SAVE VISUALIZATION TO ./results/ ---
+            # --- SAVE VISUALIZATION ---
             print("\nGenerating visual board representation...")
 
             results_dir = PROJECT_ROOT / "results"
@@ -179,13 +178,13 @@ if __name__ == "__main__":
 
             output_vis_path = str(results_dir / "prediction_visual.png")
 
-            # [FIX IS HERE] Pass the TENSOR directly, do NOT convert to list
             generate_ood_board(
-                result_tensor,  # <--- Correct: Passing Tensor
+                result_tensor,  # Passing Tensor directly
                 output_vis_path
             )
 
             print(f"✓ Visualization saved to: {output_vis_path}")
+            print(f"  (Check this image to verify the 'Nonsense' is gone!)")
 
         except Exception as e:
             print(f"\n❌ Prediction Failed: {e}")
