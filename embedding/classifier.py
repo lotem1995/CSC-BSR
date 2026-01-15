@@ -141,10 +141,7 @@ class FENClassifier:
         self.binary_head.eval()
 
         # 4. Set Transform (Uses DINO's native transform logic but forced to 518)
-        self.binary_transform = transforms.Compose([
-            transforms.Resize((518, 518)),
-            transforms.ToTensor()
-        ])
+        self.binary_transform = dino_wrapper.transform
         self.has_binary_model = True
         print("✅ Binary OOD Model attached successfully.")
 
