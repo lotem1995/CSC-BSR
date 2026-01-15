@@ -155,8 +155,6 @@ def get_train_dataloader(batch_size, num_workers):
 
 
 def get_val_dataloader(batch_size=64, num_workers=4):
-    splits_dir = Path("data/splits")
-    path_root = Path("data")
 
     # Simple transform for validation (Resize + ToTensor)
     val_transform = transforms.Compose([
