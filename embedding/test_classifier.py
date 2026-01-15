@@ -384,10 +384,13 @@ def evaluate_on_test_csv(
 
         # Predict
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
+
+        # [UPDATED]: Pass tile_images for binary OOD model
         predictions, confidences, is_ood = classifier.predict_with_ood(
             tile_embeddings,
             prediction_method=prediction_method,
             ood_method=ood_method,
+            tile_images=tile_images
         )
 
         # Store Data
@@ -496,6 +499,10 @@ def main():
     MODEL_TYPE = "dino-small"
     STRATEGY = "backbone"
 
+    # [ADDED]: Binary Model Config
+    BINARY_MODEL_PATH = "embedding/binary_ood_dino_small.pt"
+    BINARY_DINO_SIZE = "small"
+
     VAL_CSV = "data/splits/val.csv"
     TEST_CSV = "data/splits/test.csv"
 
@@ -504,9 +511,8 @@ def main():
     DO_EVALUATION = True  # Set True to run final test
 
     # --- METHOD SELECTION ---
-    # We use KNN for prediction (accurate) and Softmax for OOD (robust)
     PREDICTION_METHOD = "knn"
-    OOD_METHOD = "ensemble"
+    OOD_METHOD = "binary_ood_model"
 
     # =================================================
 
@@ -525,6 +531,13 @@ def main():
     # 2. INITIALIZE CLASSIFIER
     print(f"\n2. Initializing Classifier...")
     classifier = FENClassifier(embedding_extractor=embedding_model)
+
+    # [ADDED]: Set the binary model
+    print(f"\n2b. Setting Binary OOD Model...")
+    classifier.set_binary_model(
+        checkpoint_path=BINARY_MODEL_PATH,
+        dino_size=BINARY_DINO_SIZE
+    )
 
     needs_softmax = (
             "softmax" in [PREDICTION_METHOD, OOD_METHOD] or
@@ -574,16 +587,6 @@ def main():
     # 5. EVALUATE
     if DO_EVALUATION:
         print(f"\n5. Evaluating on {TEST_CSV}...")
-
-        # IMPORTANT: We updated evaluate_on_test_csv to accept separate methods
-        # But wait, looking at your file, evaluate_on_test_csv hardcodes the call:
-        # classifier.predict_with_ood(..., prediction_method="knn", ood_method="softmax")
-        # Let's make sure it matches what we defined above.
-
-        # (Note: You might need to slightly tweak evaluate_on_test_csv arguments
-        # to accept these variables if you want full flexibility,
-        # but for now, the hardcoded "knn" + "softmax" inside evaluate is fine
-        # as long as we built the DB and loaded the head).
 
         evaluate_on_test_csv(
             classifier=classifier,

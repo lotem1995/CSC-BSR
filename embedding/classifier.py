@@ -15,7 +15,7 @@ Classification methods:
 
 import torch
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 import tempfile
 import os
 from PIL import Image
@@ -24,6 +24,7 @@ from collections import Counter
 
 from torch import nn
 from unicodedata import is_normalized
+from torchvision import transforms
 
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 from preprocessing.splitting_images import slice_image_with_coordinates
@@ -31,16 +32,22 @@ from preprocessing.splitting_images import slice_image_with_coordinates
 sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/embadding')
 from embedding_base import EmbeddingModel
 
+# <--- ADDED DINO IMPORT ---
+try:
+    from dinov2 import DINOv2Embedding
+except ImportError:
+    from embedding.dinov2 import DINOv2Embedding
+# --------------------------
 
 class FENClassifier:
     """
     Per-tile classifier using KNN/Mahalanobis distance.
-    
+
     Classifies each of 64 tiles independently:
     - For each tile position, maintains embeddings from all seen FENs
     - Predicts class and confidence for each tile separately
     - Outputs 64 class predictions (one per tile)
-    
+
     Works with any embedding model that implements the EmbeddingModel interface.
     """
 
@@ -86,6 +93,13 @@ class FENClassifier:
 
         self.classifier_head: Optional[nn.Module] = None
 
+        # --- BINARY OOD VARIABLES ---
+        self.binary_backbone: Optional[nn.Module] = None
+        self.binary_head: Optional[nn.Module] = None
+        self.binary_transform = None
+        self.has_binary_model = False
+        # ------------------------------------
+
         print(f"Using {self.embedding_extractor} for GLOBAL FEN classification")
 
     def set_classifier_head(self, head_model: nn.Module):
@@ -96,13 +110,76 @@ class FENClassifier:
         self.classifier_head.eval()  # Ensure it's in inference mode (no dropout)
         print("Classifier head attached successfully.")
 
+    # <--- NEW FUNCTION ---
+    def set_binary_model(self, checkpoint_path: str, dino_size: str = "small"):
+        """
+        Loads the Binary OOD model (Backbone + Head) from a checkpoint.
+        This enables ood_method='binary_ood_model'.
+        """
+        print(f"[BinaryOOD] Initializing DINOv2-{dino_size} backbone...")
+        # 1. Initialize Backbone Wrapper
+        dino_wrapper = DINOv2Embedding(model_size=dino_size)
+        self.binary_backbone = dino_wrapper.model.to(self.device)
+
+        # 2. Reconstruct Binary Classifier Head
+        embedding_dim = dino_wrapper.get_embedding_dim()
+        self.binary_head = nn.Sequential(
+            nn.Linear(embedding_dim, embedding_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(embedding_dim // 2, 2), # Output: [Logits_ID, Logits_OOD]
+        ).to(self.device)
+
+        # 3. Load Weights
+        print(f"[BinaryOOD] Loading weights from {checkpoint_path}...")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+
+        self.binary_backbone.load_state_dict(checkpoint['model'])
+        self.binary_head.load_state_dict(checkpoint['classifier'])
+
+        self.binary_backbone.eval()
+        self.binary_head.eval()
+
+        # 4. Set Transform (Uses DINO's native transform logic but forced to 518)
+        self.binary_transform = transforms.Compose([
+            transforms.Resize((518, 518)),
+            transforms.ToTensor(),
+            # transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        self.has_binary_model = True
+        print("✅ Binary OOD Model attached successfully.")
+
+
+    def predict_binary_ood(self, tile_images: List[Image.Image]) -> np.ndarray:
+        """
+        Uses the internal binary model to classify tiles as OOD or Not.
+        """
+        if not self.has_binary_model:
+            raise ValueError("Binary OOD model not set. Call set_binary_model() first.")
+
+        batch_tensors = []
+        for img in tile_images:
+            if img.mode != "RGB": img = img.convert("RGB")
+            # Apply 518x518 transform
+            batch_tensors.append(self.binary_transform(img).unsqueeze(0))
+
+        x = torch.cat(batch_tensors).to(self.device)
+
+        with torch.no_grad():
+            feats = self.binary_backbone(x)
+            logits = self.binary_head(feats)
+            probs = torch.softmax(logits, dim=1)
+            preds = torch.argmax(probs, dim=1) # 0=ID, 1=OOD
+
+        return preds.cpu().numpy() == 1
+
     def extract_board_embeddings(self, board_image: Image.Image) -> torch.Tensor:
         """
         Extract embeddings for all 64 tiles from a chess board image.
-        
+
         Args:
             board_image: PIL Image of full chess board
-            
+
         Returns:
             Tensor of shape [64, 2048] with embeddings for each tile
         """
@@ -167,7 +244,8 @@ class FENClassifier:
 
     def predict_with_ood(self, tile_embeddings: torch.Tensor,
                          prediction_method: str = "knn",
-                         ood_method: str = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                         ood_method: str = None,
+                         tile_images: List[Image.Image] = None) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Flexible prediction pipeline allowing "Mix & Match" and Ensemble Voting.
         """
@@ -191,7 +269,13 @@ class FENClassifier:
             return preds, confs, ood_from_pred
 
         # --- STEP 2: Get OOD Flag (Safety Check) ---
-        if ood_method == "ensemble":
+        if ood_method == "binary_ood_model":
+            if tile_images is None:
+                raise ValueError("ood_method='binary_ood_model' requires 'tile_images' argument.")
+            is_ood = self.predict_binary_ood(tile_images)
+        # -----------------------------------
+
+        elif ood_method == "ensemble":
             # Start voting tally with the result we already have from Step 1
             votes = ood_from_pred.astype(int)
 
