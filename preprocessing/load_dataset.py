@@ -5,10 +5,12 @@ import torch
 from torch.utils.data import Dataset,DataLoader, TensorDataset, WeightedRandomSampler
 import numpy as np
 from torchvision import transforms
-import matplotlib.pyplot as plt 
+import matplotlib.pyplot as plt
 from collections import Counter
+
 splits_dir = Path("data/splits")
 path_root = Path(".")  # stored in manifest as config.path_root; adjust if you move things
+
 
 class ChessTilesCSV(Dataset):
     def __init__(self, csv_path, root, transform=None, use_embeddings=False):
@@ -17,12 +19,26 @@ class ChessTilesCSV(Dataset):
         self.transform = transform
         self.use_embeddings = use_embeddings
 
-    def __len__(self): return len(self.df)
+        self.label_map = {
+            # Empty Square
+            0: 0,
+            # White Pieces (1-6) -> Classes 1-6
+            1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6,
+            # Black Pieces (Assuming 11-16) -> Classes 7-12
+            11: 7, 12: 8, 13: 9, 14: 10, 15: 11, 16: 12
+        }
+
+
+    def __len__(self):
+        return len(self.df)
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         img_path = self.root / row.image
-        label = int(row.label)
+        # img_path = str(img_path).replace('\\', '/')
+        raw_label = int(row.label)
+        label = self.label_map.get(raw_label, 0)
+
         emb = row.embedding if isinstance(row.embedding, str) and row.embedding else None
 
         if self.use_embeddings and emb:
@@ -31,7 +47,9 @@ class ChessTilesCSV(Dataset):
         else:
             with Image.open(img_path) as img:
                 img = img.convert("RGB")
-                image_tensor = torch.from_numpy(np.array(img)).permute(2,0,1).float()/255.0
+                image_tensor = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
+        if self.transform:
+            image_tensor = self.transform(img)
         return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
 
 def paint_camel():
@@ -107,7 +125,8 @@ def get_train_dataloader(batch_size,num_workers):
         dataset,
         batch_size=batch_size,  # Adjust as needed
         sampler=sampler,  # Pass the sampler here
-        shuffle=False,  # CRITICAL: Shuffle must be False when using a any sampler - in our case the sampler already shuffle
+        shuffle=False,
+        # CRITICAL: Shuffle must be False when using a any sampler - in our case the sampler already shuffle
         num_workers=num_workers  # Adjust based on your CPU
     )
 
@@ -115,9 +134,27 @@ def get_train_dataloader(batch_size,num_workers):
     return train_loader
 
 
+def get_val_dataloader(batch_size=64, num_workers=4):
+    splits_dir = Path("data/splits")
+    path_root = Path("data")
+
+    # Pass the clean transforms to the dataset
+    val_dataset = ChessTilesCSV(splits_dir / "val.csv", root=path_root)
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,  # Correct: Keep stable
+        num_workers=num_workers,  # Correct: Speed up loading
+        pin_memory=True  # Recommended: Faster transfer to CUDA
+    )
+
+    return val_loader
+
+
 if __name__ == "__main__":
     # example of some pictures sampled from the new distribution after some transforms
-    train_loader = get_train_dataloader(64,1)
+    train_loader = get_train_dataloader(64, 1)
     import matplotlib.pyplot as plt
     import numpy as np
     import torchvision
