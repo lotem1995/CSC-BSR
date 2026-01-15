@@ -163,6 +163,7 @@ if __name__ == "__main__":
                 real_img_np = np.array(img.convert("RGB"))
 
             result_tensor = predict_board(real_img_np)
+            print(result_tensor)
 
             print("\n✓ Prediction Successful!")
             print(f"Output Shape: {result_tensor.shape}")
