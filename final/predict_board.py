@@ -13,6 +13,27 @@ BACKBONE_PATH = BASE_DIR / "chess_encoder_finetuned_dino-small_backbone.pt"
 BINARY_GUARD_PATH = BASE_DIR / "binary_ood_dino_small_epoch3.pt"
 CLASSIFIER_DB_PATH = BASE_DIR / "classifier_dino_small.pt"
 
+# --- CONFIGURATION: CLASS MAPPING ---
+# Maps Internal Model IDs (Alphabetical folders) -> Your Required Output Encoding
+# Internal (Assumption): B, K, N, P, Q, R, b, empty, k, n, p, q, r
+# Target: 0=WP, 1=WR, 2=WN, 3=WB, 4=WQ, 5=WK, 6=BP, 7=BR, 8=BN, 9=BB, 10=BQ, 11=BK, 12=Empty, 13=OOD
+INTERNAL_TO_OUTPUT = {
+    3: 0,  # P (White Pawn) -> 0
+    5: 1,  # R (White Rook) -> 1
+    2: 2,  # N (White Knight) -> 2
+    0: 3,  # B (White Bishop) -> 3
+    4: 4,  # Q (White Queen) -> 4
+    1: 5,  # K (White King) -> 5
+    10: 6,  # p (Black Pawn) -> 6
+    12: 7,  # r (Black Rook) -> 7
+    9: 8,  # n (Black Knight) -> 8
+    6: 9,  # b (Black Bishop) -> 9
+    11: 10,  # q (Black Queen) -> 10
+    8: 11,  # k (Black King) -> 11
+    7: 12,  # empty -> 12
+    17: 13  # Internal OOD -> 13
+}
+
 # --- SETUP IMPORTS ---
 PROJECT_ROOT = BASE_DIR.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -60,10 +81,15 @@ print("✓ Models Loaded Successfully.\n")
 def predict_board(image: np.ndarray) -> torch.Tensor:
     """
     Predict the chessboard state from a single RGB image.
+
     Args:
         image (np.ndarray): Input image array (H, W, 3) in RGB format.
+                            Dtype uint8, Range [0, 255].
+
     Returns:
         torch.Tensor: Shape (8, 8), Dtype int64, on CPU.
+                      [0,0] is Top-Left, [7,7] is Bottom-Right.
+                      Values 0-14 per strict encoding.
     """
     # 1. Validation
     if image.ndim != 3 or image.shape[2] != 3:
@@ -84,9 +110,8 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
 
         dummy_board = np.zeros((8, 8), dtype=int)
 
-        # [FIXED] Added the missing 'game_name' argument ("pred")
         slice_image_with_coordinates(
-            "pred",  # game_name (Required 1st arg)
+            "pred",  # game_name
             tmp_board_path,  # image_path
             tmp_dir,  # output_folder
             dummy_board,  # board
@@ -97,12 +122,10 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
         base_name = os.path.splitext(os.path.basename(tmp_board_path))[0]
         for r in range(8):
             for c in range(8):
-                # [FIXED] Updated filename to include the "pred_" prefix added by the slicer
                 fname = f"pred_{base_name}_tile_row{r}_column{c}_class0.png"
                 tile_path = os.path.join(tmp_dir, fname)
 
                 if not os.path.exists(tile_path):
-                    # Fallback check just in case the slicer logic varies
                     raise FileNotFoundError(f"Slicing failed, missing tile: {fname}")
 
                 with Image.open(tile_path) as img:
@@ -119,11 +142,15 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
         tile_images=tile_images
     )
 
-    # 5. Mask OOD
-    final_preds = preds.copy()
-    final_preds[is_ood] = 17
+    # 5. Mask OOD (Internal ID 17)
+    internal_preds = preds.copy()
+    internal_preds[is_ood] = 17
 
-    # 6. Return Tensor (8x8)
+    # 6. Apply Class Mapping (Internal -> Target 0-14)
+    # We use a vectorized lookup if possible, or list comp for safety
+    final_preds = np.array([INTERNAL_TO_OUTPUT.get(p, 13) for p in internal_preds])
+
+    # 7. Return Tensor (8x8)
     return torch.from_numpy(final_preds).long().cpu().view(8, 8)
 
 
@@ -144,6 +171,7 @@ if __name__ == "__main__":
 
             print("\n✓ Prediction Successful!")
             print(f"Output Shape: {result.shape}")
+            print(f"Values Range: [{result.min()}, {result.max()}]")
             print("\nPredicted Board (Top-Left 8x8):\n", result)
 
         except Exception as e:
