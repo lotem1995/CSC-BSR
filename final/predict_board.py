@@ -147,6 +147,8 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
     # 6. Apply Class Mapping (Internal -> Target 0-14)
     final_preds = np.array([INTERNAL_TO_OUTPUT.get(p, 13) for p in internal_preds])
 
+    print(torch.from_numpy(final_preds).long().cpu().view(8, 8))
+
     # 7. Return Tensor (8x8)
     return torch.from_numpy(final_preds).long().cpu().view(8, 8)
 
