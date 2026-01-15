@@ -167,25 +167,18 @@ if __name__ == "__main__":
             print("\n✓ Prediction Successful!")
             print(f"Output Shape: {result_tensor.shape}")
 
-            board_grid = result_tensor.tolist()
-
             # --- SAVE VISUALIZATION TO ./results/ ---
             print("\nGenerating visual board representation...")
 
-            # 1. Define Results Directory
             results_dir = PROJECT_ROOT / "results"
-
-            # 2. Create directory if it doesn't exist
             if not results_dir.exists():
                 os.makedirs(results_dir)
-                print(f"Created directory: {results_dir}")
 
-            # 3. Define Output Path
             output_vis_path = str(results_dir / "prediction_visual.png")
 
-            # 4. Generate and Save
+            # [FIX IS HERE] Pass the TENSOR directly, do NOT convert to list
             generate_ood_board(
-                board_grid,
+                result_tensor,  # <--- Correct: Passing Tensor
                 output_vis_path
             )
 
