@@ -155,7 +155,7 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
 
 # --- TEST BLOCK ---
 if __name__ == "__main__":
-    target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_037896.jpg"
+    target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_000028.jpg"
     print(f"Looking for image at: {target_image}")
 
     if target_image.exists():
