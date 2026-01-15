@@ -14,9 +14,7 @@ BINARY_GUARD_PATH = BASE_DIR / "binary_ood_dino_small_epoch3.pt"
 CLASSIFIER_DB_PATH = BASE_DIR / "classifier_dino_small.pt"
 
 # --- CONFIGURATION: CLASS MAPPING ---
-# Maps Internal Model IDs (Alphabetical folders) -> Your Required Output Encoding
-# Internal (Assumption): B, K, N, P, Q, R, b, empty, k, n, p, q, r
-# Target: 0=WP, 1=WR, 2=WN, 3=WB, 4=WQ, 5=WK, 6=BP, 7=BR, 8=BN, 9=BB, 10=BQ, 11=BK, 12=Empty, 13=OOD
+# Maps Internal Model IDs -> Your Required Output Encoding [0-14]
 INTERNAL_TO_OUTPUT = {
     3: 0,  # P (White Pawn) -> 0
     5: 1,  # R (White Rook) -> 1
@@ -45,6 +43,7 @@ try:
     from embedding.dinov2 import DINOv2Embedding
     from embedding.classifier import FENClassifier
     from preprocessing.splitting_images import slice_image_with_coordinates
+    from drawing.draw_board import generate_ood_board
 except ImportError as e:
     print(f"Error importing modules: {e}")
     sys.exit(1)
@@ -88,7 +87,6 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
 
     Returns:
         torch.Tensor: Shape (8, 8), Dtype int64, on CPU.
-                      [0,0] is Top-Left, [7,7] is Bottom-Right.
                       Values 0-14 per strict encoding.
     """
     # 1. Validation
@@ -147,18 +145,15 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
     internal_preds[is_ood] = 17
 
     # 6. Apply Class Mapping (Internal -> Target 0-14)
-    # We use a vectorized lookup if possible, or list comp for safety
     final_preds = np.array([INTERNAL_TO_OUTPUT.get(p, 13) for p in internal_preds])
 
     # 7. Return Tensor (8x8)
     return torch.from_numpy(final_preds).long().cpu().view(8, 8)
 
 
-# --- TEST BLOCK ---
+# --- UPDATED TEST BLOCK ---
 if __name__ == "__main__":
-    # Construct absolute path to the test image
     target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_000616.jpg"
-
     print(f"Looking for image at: {target_image}")
 
     if target_image.exists():
@@ -167,12 +162,34 @@ if __name__ == "__main__":
             with Image.open(target_image) as img:
                 real_img_np = np.array(img.convert("RGB"))
 
-            result = predict_board(real_img_np)
+            result_tensor = predict_board(real_img_np)
 
             print("\n✓ Prediction Successful!")
-            print(f"Output Shape: {result.shape}")
-            print(f"Values Range: [{result.min()}, {result.max()}]")
-            print("\nPredicted Board (Top-Left 8x8):\n", result)
+            print(f"Output Shape: {result_tensor.shape}")
+
+            board_grid = result_tensor.tolist()
+
+            # --- SAVE VISUALIZATION TO ./results/ ---
+            print("\nGenerating visual board representation...")
+
+            # 1. Define Results Directory
+            results_dir = PROJECT_ROOT / "results"
+
+            # 2. Create directory if it doesn't exist
+            if not results_dir.exists():
+                os.makedirs(results_dir)
+                print(f"Created directory: {results_dir}")
+
+            # 3. Define Output Path
+            output_vis_path = str(results_dir / "prediction_visual.png")
+
+            # 4. Generate and Save
+            generate_ood_board(
+                board_grid,
+                output_vis_path
+            )
+
+            print(f"✓ Visualization saved to: {output_vis_path}")
 
         except Exception as e:
             print(f"\n❌ Prediction Failed: {e}")
