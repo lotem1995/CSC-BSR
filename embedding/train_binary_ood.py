@@ -206,6 +206,10 @@ def train_binary_ood(
         logger.info(f"  OOD Recall (Caught): {rec:.4f}")
         logger.info(f"  False Alarms: {cm[0, 1]}")
 
+        epoch_path = f"embedding/binary_ood_dino_{dino_size}_epoch{epoch + 1}.pt"
+        trainer.save(epoch_path)
+        logger.info(f"  -> Saved Checkpoint: {epoch_path}")
+
     # 4. Save
     output_path = f"embedding/binary_ood_dino_{dino_size}.pt"
     trainer.save(output_path)
