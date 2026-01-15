@@ -135,7 +135,7 @@ def train_binary_ood(
 
     # 2. Data Loaders (Using your corrected loader)
     logger.info("Loading Datasets via get_train_dataloader...")
-    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers)
+    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers, resize=518)
     val_loader = get_val_dataloader(batch_size=batch_size, num_workers=num_workers)
 
     # 3. Training Loop
