@@ -323,7 +323,7 @@ def evaluate_on_test_csv(
         classifier: FENClassifier,
         test_csv_path: str,
         prediction_method="knn",
-        ood_method="softmax",
+        ood_method="binary_ood_model",
         ood_output_dir: str = "ood_inspection_images"
 ):
     """
@@ -500,7 +500,7 @@ def main():
     STRATEGY = "backbone"
 
     # [ADDED]: Binary Model Config
-    BINARY_MODEL_PATH = "embedding/binary_ood_dino_small.pt"
+    BINARY_MODEL_PATH = "embedding/binary_ood_dino_small_epoch3.pt"
     BINARY_DINO_SIZE = "small"
 
     VAL_CSV = "data/splits/val.csv"
