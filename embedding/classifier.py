@@ -441,38 +441,83 @@ class FENClassifier:
         print(f"Mahalanobis Threshold set to: {self.mahal_threshold:.4f}")
 
     def save(self, path: str):
-        """Save GLOBAL classifier to disk"""
-        print(f"Saving global classifier with {len(self.global_embeddings)} embeddings...")
-        torch.save({
+        """
+        Save the FULL classifier state, including the KNN memory and all calibrated thresholds.
+        This allows loading the model for inference without needing the original validation data.
+        """
+        print(f"Saving global classifier state to {path}...")
+
+        state_dict = {
+            # 1. The Memory (KNN Database)
             'global_embeddings': self.global_embeddings,
             'global_labels': self.global_labels,
-            'knn_similarity_threshold': self.knn_similarity_threshold
-        }, path)
-        print("Saved successfully.")
+
+            # 2. calibrated Thresholds
+            'knn_similarity_threshold': self.knn_similarity_threshold,
+            'knn_distance_threshold': self.knn_distance_threshold,
+            'mahal_threshold': self.mahal_threshold,
+
+            # 3. Mahalanobis Statistics (So we don't need to re-compute them)
+            'global_means': self.global_means,
+            'global_cov_inv': self.global_cov_inv,
+
+            # 4. Softmax Defaults
+            'softmax_temperature': self.softmax_temperature,
+            'softmax_threshold': self.softmax_threshold
+        }
+
+        torch.save(state_dict, path)
+        print("✓ Classifier saved successfully.")
 
     def load(self, path: str):
-        """Load GLOBAL classifier from disk"""
+        """
+        Load the classifier and IMMEDIATELY rebuild the index.
+        The classifier will be ready for prediction instantly.
+        """
         print(f"Loading classifier from {path}...")
         if not os.path.exists(path):
-            print("Warning: Checkpoint not found. Database will be empty.")
+            print("❌ Error: Checkpoint not found.")
             return
 
-        data = torch.load(path)
+        data = torch.load(path, map_location=self.device)
 
-        # Check if this is an old format file (migration check)
-        if 'tile_database' in data:
-            print("[WARNING] This is an OLD format file (Per-Tile). Ignoring it.")
-            print("Please uncomment Step 4 in test_classifier.py to rebuild the database.")
-            return
+        # 1. Restore Memory
+        self.global_embeddings = data.get('global_embeddings', [])
+        self.global_labels = data.get('global_labels', [])
 
-        self.global_embeddings = data['global_embeddings']
-        self.global_labels = data['global_labels']
+        # 2. Restore Thresholds (with defaults if missing)
+        self.knn_similarity_threshold = data.get('knn_similarity_threshold', 0.60)
+        self.knn_distance_threshold = data.get('knn_distance_threshold', 1.1)
+        self.mahal_threshold = data.get('mahal_threshold', 20.0)
 
-        # Restore threshold if it exists, otherwise keep default
-        if 'knn_similarity_threshold' in data:
-            self.knn_similarity_threshold = data['knn_similarity_threshold']
+        # 3. Restore Mahalanobis Stats
+        self.global_means = data.get('global_means', None)
+        self.global_cov_inv = data.get('global_cov_inv', None)
 
-        print(f"Loaded {len(self.global_embeddings)} global embeddings.")
+        # 4. Restore Softmax Params
+        self.softmax_temperature = data.get('softmax_temperature', 5)
+        self.softmax_threshold = data.get('softmax_threshold', 0.15)
+
+        # Move stats to device if they exist
+        if self.global_means is not None:
+            self.global_means = self.global_means.to(self.device)
+        if self.global_cov_inv is not None:
+            self.global_cov_inv = self.global_cov_inv.to(self.device)
+
+        # 5. REBUILD THE INDEX AUTOMATICALLY
+        # This replaces the need to call update_thresholds() or have validation data
+        if len(self.global_embeddings) > 0:
+            print(f"Rebuilding index with {len(self.global_embeddings)} samples...")
+            self.normalized_embeddings = torch.stack(self.global_embeddings).to(self.device)
+            self.normalized_labels = torch.tensor(self.global_labels).to(self.device)
+
+            # Normalize for Cosine Similarity
+            self.normalized_embeddings = torch.nn.functional.normalize(
+                self.normalized_embeddings, p=2, dim=1
+            )
+            print("✓ Index built and ready for inference.")
+        else:
+            print("⚠️ Warning: Loaded classifier has empty database.")
 
     # ============ METHOD 1: KNN ============
     def predict_knn(self, tile_embeddings: torch.Tensor) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
