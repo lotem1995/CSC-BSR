@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 import yaml
 
@@ -313,7 +314,7 @@ def _gather_tiles(
     relabeled_to_ood = 0
 
     tiles: List[Dict] = []
-    for image_path in sorted(raw_png_paths):
+    for image_path in tqdm(sorted(raw_png_paths), desc="Gathering tiles", unit="tile"):
         # Safety: if hands_dir is inside raw_tiles_dir, do NOT ingest the copies inside hands_dir
         try:
             image_path.resolve().relative_to(hands_dir)
@@ -413,11 +414,12 @@ def build_manifest(config_path: Path) -> Dict:
 
     split_tiles = _group_stratified_split(tiles, split, known_game_names, NUM_CLASSES, seed)
 
+    # Store relative paths in manifest for portability
     manifest = {
         "config": {
-            "raw_tiles_dir": str(raw_tiles_dir),
-            "data_root": str(data_root_path) if data_root_path else None,
-            "embedding_dir": str(embedding_dir_path) if embedding_dir_path else None,
+            "raw_tiles_dir": os.path.relpath(raw_tiles_dir, path_root),
+            "data_root": os.path.relpath(data_root_path, path_root) if data_root_path else None,
+            "embedding_dir": os.path.relpath(embedding_dir_path, path_root) if embedding_dir_path else None,
             "embedding_ext": embedding_ext,
             "split": split,
             "seed": seed,
@@ -425,15 +427,15 @@ def build_manifest(config_path: Path) -> Dict:
             "tile_overlap": overlap_percent,
             "zero_padding": zero_padding,
             "path_root": str(path_root),
-            "hands_dir": str(hands_dir),
+            "hands_dir": os.path.relpath(hands_dir, path_root),
         },
         "classes": CLASS_MAP,
         "splits": {name: [] for name in split},
     }
 
     tiles_by_path = {tile["image"]: tile for tile in tiles}
-    for split_name, image_paths in split_tiles.items():
-        for image_path in image_paths:
+    for split_name, image_paths in tqdm(split_tiles.items(), desc="Building manifest splits", unit="split"):
+        for image_path in tqdm(image_paths, desc=f"Split: {split_name}", unit="sample", leave=False):
             tile = tiles_by_path[image_path]
             manifest["splits"][split_name].append(_relativize_sample(tile, path_root))
 
@@ -493,11 +495,11 @@ def save_manifest(manifest: Dict, output_path: Path) -> None:
 
 def save_split_indices(manifest: Dict, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    for split_name, samples in manifest["splits"].items():
+    for split_name, samples in tqdm(manifest["splits"].items(), desc="Saving split indices", unit="split"):
         csv_path = output_dir / f"{split_name}.csv"
         with csv_path.open("w", encoding="utf-8") as handle:
             handle.write("image,label,board_id,embedding\n")
-            for sample in samples:
+            for sample in tqdm(samples, desc=f"Writing {split_name}", unit="sample", leave=False):
                 embedding = sample.get("embedding") or ""
                 handle.write(f"{sample['image']},{sample['label']},{sample['board_id']},{embedding}\n")
 
@@ -511,10 +513,9 @@ def _generate_tiles_from_games(
 ) -> None:
     raw_tiles_dir.mkdir(parents=True, exist_ok=True)
     # games_list now contains (game_name, csv_path, images_dir)
-    for game_name, csv_path, images_dir in games_list:
+    for game_name, csv_path, images_dir in tqdm(games_list, desc="Processing games", unit="game"):
         pairs = pair_images_with_fens(str(csv_path), str(images_dir))
-        print("Generating tiles for game", game_name)
-        for image_path, fen in pairs:
+        for image_path, fen in tqdm(pairs, desc=f"Tiles for {game_name}", unit="tile", leave=False):
             board = fen_to_board_int(fen)
             slice_image_with_coordinates(
                 game_name,
@@ -535,13 +536,27 @@ def _discover_games(data_root: Path) -> List[Tuple[str, Path, Path]]:
     for game_dir in sorted(data_root.iterdir()):
         if not game_dir.is_dir():
             continue
-        csv_files = sorted(game_dir.glob("*.csv"))
-        images_dir = game_dir / "tagged_images"
+        # Prefer standardized gt.csv when available
+        csv_files = list(game_dir.glob("gt.csv"))
+        if not csv_files:
+            csv_files = sorted(game_dir.glob("*.csv"))
+
+        images_dir = game_dir / "images"
+        if not images_dir.exists():
+            images_dir = game_dir / "tagged_images"
+
         if not csv_files or not images_dir.exists():
             continue
-        # Use folder name or CSV stem as game name
-        game_name = csv_files[0].stem
-        games.append((game_name, csv_files[0], images_dir))
+        csv_path = csv_files[0]
+
+        # Use folder name or CSV stem as game name; strip suffix if present
+        game_name = csv_path.stem
+        if game_name == "gt":
+            game_name = game_dir.name
+        if game_name.endswith("_per_frame"):
+            game_name = game_name.replace("_per_frame", "")
+
+        games.append((game_name, csv_path, images_dir))
     if not games:
         raise RuntimeError(f"No game folders with CSV and tagged_images found under {data_root}")
     return games

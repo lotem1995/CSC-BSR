@@ -1,0 +1,13 @@
+image_name,fen,view
+frame_000024.jpg,rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR,white_bottom
+frame_003532.jpg,rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR,white_bottom
+frame_003572.jpg,rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR,white_bottom
+frame_003608.jpg,rnbqkbnr/ppp1pppp/8/3p4/2PP4/8/PP2PPPP/RNBQKBNR,white_bottom
+frame_003692.jpg,rnbqkbnr/ppp1pppp/8/8/2pP4/8/PP2PPPP/RNBQKBNR,white_bottom
+frame_003728.jpg,rnbqkbnr/ppp1pppp/8/8/2pP4/2N5/PP2PPPP/R1BQKBNR,white_bottom
+frame_003760.jpg,rnbqkb1r/ppp1pppp/5n2/8/2pP4/2N5/PP2PPPP/R1BQKBNR,white_bottom
+frame_003816.jpg,rnbqkb1r/ppp1pppp/5n2/8/2pPP3/2N5/PP3PPP/R1BQKBNR,white_bottom
+frame_003888.jpg,r1bqkb1r/ppp1pppp/2n2n2/8/2pPP3/2N5/PP3PPP/R1BQKBNR,white_bottom
+frame_004152.jpg,r1bqkb1r/ppp1pppp/2n2n2/8/2BPP3/2N5/PP3PPP/R1BQK1NR,white_bottom
+frame_004280.jpg,r1bqkb1r/ppp2ppp/2n2n2/4p3/2BPP3/2N5/PP3PPP/R1BQK1NR,white_bottom
+frame_004616.jpg,r1bqkb1r/ppp2ppp/2n2n2/4p3/2BPP3/2N2N2/PP3PPP/R1BQK2R,white_bottom
