@@ -2,13 +2,14 @@ import pandas as pd
 from pathlib import Path
 from PIL import Image
 import torch
-from torch.utils.data import Dataset,DataLoader, TensorDataset, WeightedRandomSampler
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 import numpy as np
 from torchvision import transforms
-import matplotlib.pyplot as plt 
-from collections import Counter
+
+# Adjust paths if your project structure is different
 splits_dir = Path("data/splits")
 path_root = Path(".")  # stored in manifest as config.path_root; adjust if you move things
+
 
 class ChessTilesCSV(Dataset):
     def __init__(self, csv_path, root, transform=None, use_embeddings=False):
@@ -17,22 +18,50 @@ class ChessTilesCSV(Dataset):
         self.transform = transform
         self.use_embeddings = use_embeddings
 
-    def __len__(self): return len(self.df)
+        self.label_map = {
+            # Empty Square
+            0: 0,
+            # White Pieces (1-6) -> Classes 1-6
+            1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6,
+            # Black Pieces (11-16) -> Classes 7-12
+            11: 7, 12: 8, 13: 9, 14: 10, 15: 11, 16: 12,
+            # OOD (Class 17) -> Class 17 [FIXED: Added this line]
+            17: 17
+        }
+
+    def __len__(self):
+        return len(self.df)
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         img_path = self.root / row.image
-        label = int(row.label)
+        raw_label = int(row.label)
+
+        # Default to 0 if label not found (safety)
+        label = self.label_map.get(raw_label, 0)
+
         emb = row.embedding if isinstance(row.embedding, str) and row.embedding else None
 
+        # CASE A: Using Pre-calculated Embeddings
         if self.use_embeddings and emb:
             features = torch.as_tensor(np.load(self.root / emb))
-            image_tensor = features
+            # Note: Transforms are usually not applied to embeddings
+            return {"image": features, "label": label, "board_id": row.board_id, "path": str(img_path)}
+
+        # CASE B: Loading Images
         else:
             with Image.open(img_path) as img:
                 img = img.convert("RGB")
-                image_tensor = torch.from_numpy(np.array(img)).permute(2,0,1).float()/255.0
-        return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
+
+                # [FIXED] Apply transforms here, while 'img' exists
+                if self.transform:
+                    image_tensor = self.transform(img)
+                else:
+                    # Default if no transform provided
+                    image_tensor = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
+
+            return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
+
 
 def paint_camel():
     # We use 'r' before the string to denote a raw string
@@ -57,7 +86,8 @@ def paint_camel():
     """
     print(art)
 
-def get_train_dataloader(batch_size,num_workers):
+
+def get_train_dataloader(batch_size, num_workers):
     # --- CONFIGURATION ---
     rotation_jitter = 5  # Change this number to increase/decrease the "wiggle"
 
@@ -69,8 +99,7 @@ def get_train_dataloader(batch_size,num_workers):
         transforms.RandomRotation(degrees=(270 - rotation_jitter, 270 + rotation_jitter)),
     ])
     train_transforms = transforms.Compose([
-        # we simply force the image
-        # to the correct size for the model.
+        # we simply force the image to the correct size for the model.
         transforms.Resize((224, 224)),
         # 1. Geometric Flips
         transforms.RandomHorizontalFlip(p=0.5),
@@ -87,74 +116,61 @@ def get_train_dataloader(batch_size,num_workers):
     # 1. Instantiate your dataset
     dataset = ChessTilesCSV(splits_dir / "train.csv", root=path_root, transform=train_transforms)
     labels = dataset.df['label'].values
+
     class_counts = dataset.df['label'].value_counts().sort_index()
 
-    # Calculate the weight for each class
-    class_weights = 1.0 / class_counts  # no need to normalize it - WeightedRandomSampler does it for you
+    # Calculate weight per class
+    class_weights = 1.0 / class_counts
     class_weights_dict = class_weights.to_dict()
-    sample_weights = [class_weights_dict[label] for label in labels]
+
+    # Map weights to each sample
+    sample_weights = [class_weights_dict.get(label, 0) for label in labels]
     sample_weights = torch.DoubleTensor(sample_weights)
+
+    # Create Sampler
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
 
     # Create the Sampler
     sampler = WeightedRandomSampler(
         weights=sample_weights,
         num_samples=len(sample_weights),
-        replacement=True  # Essential: allows oversampling the minority class
+        replacement=True
     )
 
     # Create the DataLoader
     train_loader = DataLoader(
         dataset,
-        batch_size=batch_size,  # Adjust as needed
-        sampler=sampler,  # Pass the sampler here
-        shuffle=False,  # CRITICAL: Shuffle must be False when using a any sampler - in our case the sampler already shuffle
-        num_workers=num_workers  # Adjust based on your CPU
+        batch_size=batch_size,
+        sampler=sampler,
+        shuffle=False,
+        num_workers=num_workers
     )
 
     paint_camel()
     return train_loader
 
 
-if __name__ == "__main__":
-    # example of some pictures sampled from the new distribution after some transforms
-    train_loader = get_train_dataloader(64,1)
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import torchvision
+def get_val_dataloader(batch_size=64, num_workers=4):
 
+    # Simple transform for validation (Resize + ToTensor)
+    val_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ])
 
-    # Function to un-normalize and display an image
-    def imshow(tensor, title=None):
-        # 1. Clone tensor so we don't modify the original
-        img = tensor.clone().detach().cpu()
+    # Pass the clean transforms to the dataset
+    val_dataset = ChessTilesCSV(splits_dir / "val.csv", root=path_root, transform=val_transform)
 
-        # 4. Convert (C, H, W) -> (H, W, C) for Matplotlib
-        img = img.permute(1, 2, 0).numpy()
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True
+    )
 
-        # 5. Plot
-        plt.imshow(img)
-        if title is not None:
-            plt.title(title)
-        plt.axis('off')
-
-
-    # --- MAIN EXECUTION ---
-
-    # 1. Get a single batch
-    print("Fetching a batch...")
-    batch = next(iter(train_loader))
-    images = batch['image']  # Access by key (based on your dataset class)
-    labels = batch['label']
-
-    # 2. Create a grid of images
-    # We'll show the first 16 images of the batch
-    num_show = 16
-    grid_img = torchvision.utils.make_grid(images[:num_show], nrow=4, padding=2)
-
-    # 3. Plot the grid
-    plt.figure(figsize=(10, 10))
-    imshow(grid_img, title=f"Batch Sample (Labels: {labels[:num_show].tolist()})")
-    plt.show()
-
-    # 4. Print Distribution Check (Text)
-    print(f"\nBatch Label Counts: {torch.bincount(labels)}")
+    return val_loader

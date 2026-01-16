@@ -11,11 +11,28 @@ zero_padding: true
 embedding_dir: ./embeddings
 embedding_ext: .npy
 
-# Train/Val/Test split ratios (must sum to 1.0)
+# OPTION 1: Old way (percentages)
+# split:
+#   train: 0.8
+#   val: 0.1
+#   test: 0.1
+
+# OPTION 2: New way (Specific Games)
+# Use the CSV filenames
 split:
-  train: 0.6
-  val: 0.2
-  test: 0.2
+  train:
+    - "game5"
+    - "game6"
+    - "game7"
+  val:
+    - "game2"
+    - "game8"
+    - "game9"
+    - "game10"
+  test:
+    - "game4"
+    - "game11"
+    - "game12"
 
 # Reproducibility seed
 seed: 42

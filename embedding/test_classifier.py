@@ -13,7 +13,8 @@ IMPORTANT: This script must be run from the project root directory:
 
 The CSV files contain paths relative to project root (e.g., 'preprocessed_data/...').
 """
-
+import os
+import shutil
 import sys
 from pathlib import Path
 import torch
@@ -23,6 +24,7 @@ from typing import List
 import pandas as pd
 from tqdm import tqdm
 import re
+import torch.nn as nn
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -177,187 +179,423 @@ def parse_tile_coords(image_path: str) -> tuple:
     return int(match.group(1)), int(match.group(2))
 
 
+
+
+
+def load_classifier_head(checkpoint_path: str, embedding_dim: int) -> nn.Module:
+    """
+    Reconstructs the classifier head architecture and loads weights.
+    """
+    print(f"Loading classifier head from {checkpoint_path}...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # DEFINITION MUST MATCH fine_tune.py EXACTLY
+    classifier = nn.Sequential(
+        nn.Linear(embedding_dim, embedding_dim // 2),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        nn.Linear(embedding_dim // 2, 13),
+    )
+
+    # Load the weights
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if 'classifier' not in checkpoint:
+        raise ValueError("Checkpoint does not contain 'classifier' state_dict")
+
+    classifier.load_state_dict(checkpoint['classifier'])
+    classifier.to(device)
+    classifier.eval()  # Freeze it
+    return classifier
+
+
+def grid_search_optimization(classifier: FENClassifier, val_csv_path: str):
+    """
+    Finds the best Temperature and Threshold by testing thousands of combinations.
+    Optimizes for: High OOD Recall (Safety) vs. Low False Rejection Rate (Usability).
+    """
+    print(f"\n{'=' * 80}")
+    print("HYPERPARAMETER OPTIMIZATION (GRID SEARCH)")
+    print(f"{'=' * 80}")
+
+    # 1. LOAD DATA & EXTRACT EMBEDDINGS
+    print(f"Loading validation data from {val_csv_path}...")
+    df = pd.read_csv(val_csv_path)
+
+    image_paths = []
+    true_labels = []
+
+    for _, row in df.iterrows():
+        img_path = Path(row['image'])
+        if not img_path.is_absolute(): img_path = Path.cwd() / img_path
+        image_paths.append(img_path)
+        true_labels.append(row['label'])
+
+    print(f"Extracting embeddings for {len(image_paths)} tiles (this takes a moment)...")
+
+    # Batch processing
+    batch_size = 32
+    all_embeddings = []
+
+    for i in tqdm(range(0, len(image_paths), batch_size), desc="Extracting"):
+        batch_paths = image_paths[i:i + batch_size]
+        batch_imgs = [Image.open(p).convert('RGB') for p in batch_paths]
+        emb_batch = classifier.embedding_extractor.extract_batch_embeddings(batch_imgs)
+        all_embeddings.append(emb_batch.cpu())
+
+    X_val = torch.cat(all_embeddings).to(classifier.device)
+    y_val = torch.tensor(true_labels).to(classifier.device)
+
+    # 2. DEFINE THE SEARCH GRID
+    temperatures = np.arange(0.1, 10.0, 0.1)
+    thresholds = np.arange(0.1, 0.95, 0.01)
+    OOD_LABEL = 17
+
+    # Masks
+    is_ood_ground_truth = (y_val == OOD_LABEL)
+    is_id_ground_truth = ~is_ood_ground_truth
+
+    n_ood = is_ood_ground_truth.sum().item()
+    n_id = is_id_ground_truth.sum().item()
+
+    print(f"\nOptimization Dataset:")
+    print(f"  - Valid Pieces (ID): {n_id}")
+    print(f"  - Anomalies (OOD):   {n_ood}")
+
+    # 3. RUN THE GRID SEARCH
+    results = []
+    with torch.no_grad():
+        if classifier.classifier_head is None:
+            print("Error: No classifier head attached! Cannot optimize Softmax.")
+            return
+
+        logits_raw = classifier.classifier_head(X_val)
+
+        for temp in temperatures:
+            scaled_logits = logits_raw / temp
+            probs = torch.softmax(scaled_logits, dim=1)
+            confidences, predictions = torch.max(probs, dim=1)
+
+            for thresh in thresholds:
+                flagged_ood = (confidences < thresh)
+
+                # Metric 1: Recall (Catching the bad guys)
+                if n_ood > 0:
+                    caught_ood = (flagged_ood & is_ood_ground_truth).sum().item()
+                    ood_recall = caught_ood / n_ood
+                else:
+                    ood_recall = 0.0
+
+                # Metric 2: False Rejection (Annoying the user)
+                if n_id > 0:
+                    false_rejects = (flagged_ood & is_id_ground_truth).sum().item()
+                    false_rejection_rate = false_rejects / n_id
+                else:
+                    false_rejection_rate = 0.0
+
+                results.append({
+                    "Temp": temp,
+                    "Threshold": thresh,
+                    "OOD_Recall": ood_recall,
+                    "False_Rejection": false_rejection_rate
+                })
+
+    # 4. ANALYZE RESULTS
+    df_res = pd.DataFrame(results)
+
+    print("\n--- 1. SAFE BETS (Constraint: False Rejection < 1%) ---")
+    safe_settings = df_res[df_res['False_Rejection'] < 0.01].sort_values('OOD_Recall', ascending=False)
+    print(safe_settings.head(5).to_string(index=False, float_format="%.4f"))
+
+    # --- NEW CALCULATION HERE ---
+    print("\n--- 2. REAL-WORLD OPTIMIZATION (Assuming 1% OOD Prevalence) ---")
+    print("Maximizing: 0.99 * (1 - False_Rejection) + 0.01 * Recall")
+
+    # Formula explanation:
+    # We care 99x more about False Rejection than Recall, because valid pieces are 99x more common.
+    df_res['Projected_Accuracy'] = (0.99 * (1 - df_res['False_Rejection'])) + (0.01 * df_res['OOD_Recall'])
+
+    real_world_settings = df_res.sort_values('Projected_Accuracy', ascending=False)
+    print(real_world_settings.head(10).to_string(index=False, float_format="%.4f"))
+
+    return real_world_settings
+
 def evaluate_on_test_csv(
-    classifier: FENClassifier,
-    test_csv_path: str,
-    data_root: str = "data",
-    method: str = "mahalanobis"
+        classifier: FENClassifier,
+        test_csv_path: str,
+        prediction_method="knn",
+        ood_method="binary_ood_model",
+        ood_output_dir: str = "ood_inspection_images"
 ):
     """
-    Evaluate the classifier on test.csv.
-    
-    Args:
-        classifier: Trained FENClassifier instance
-        test_csv_path: Path to test.csv
-        data_root: Root directory for image paths
-        method: "knn" or "mahalanobis"
+    Evaluate the classifier with detailed OOD metrics.
+    Saves images into categorized folders for easier inspection.
     """
     print(f"\nEvaluating on {test_csv_path}")
-    print(f"Method: {method}")
-    
+    print(f"prediction_method: {prediction_method}, ood_method: {ood_method}")
+
+    # --- SETUP FOLDERS ---
+    # Clear previous run
+    if os.path.exists(ood_output_dir):
+        shutil.rmtree(ood_output_dir)
+
+    # Create main directory and sub-directories
+    dir_false_reject = os.path.join(ood_output_dir, "false_rejections")  # Valid pieces flagged as OOD
+    dir_missed_ood = os.path.join(ood_output_dir, "missed_ood")  # OOD pieces that sneaked in
+    dir_correct_ood = os.path.join(ood_output_dir, "correct_ood")  # OOD pieces correctly caught
+
+    os.makedirs(dir_false_reject)
+    os.makedirs(dir_missed_ood)
+    os.makedirs(dir_correct_ood)
+
+    print(f"Saving inspection images to: {ood_output_dir}/")
+
     # Load test CSV
     df = pd.read_csv(test_csv_path)
-    
-    # Group by board_id to evaluate whole boards
     board_ids = df['board_id'].unique()
-    
-    total_tiles = 0
-    correct_tiles = 0
-    
+
+    # --- STORAGE FOR METRICS ---
+    all_true_labels = []
+    all_predictions = []
+    all_is_ood = []
+
+    # Define the OOD Label
+    OOD_LABEL = 17
+
     for board_id in tqdm(board_ids, desc="Evaluating boards"):
-        # Get all 64 tiles for this board
         board_df = df[df['board_id'] == board_id].copy()
-        
+
         if len(board_df) != 64:
-            print(f"Warning: Board {board_id} has {len(board_df)} tiles, skipping")
             continue
-        
-        # Parse tile coordinates and sort by (row, col) to ensure correct ordering
+
+        # Sort and Load
         board_df['tile_coords'] = board_df['image'].apply(parse_tile_coords)
         board_df = board_df.sort_values('tile_coords')
-        
-        # Load tile images in correct order
+
         tile_images = []
         true_labels = []
         for _, row in board_df.iterrows():
-            # CSV paths are relative to project root (e.g., 'preprocessed_data/...')
             img_path = Path(row['image'])
             if not img_path.is_absolute():
-                # Resolve relative to current directory (project root)
                 img_path = Path.cwd() / img_path
-            
+
             with Image.open(img_path) as im:
                 tile_images.append(im.convert('RGB').copy())
             true_labels.append(row['label'])
-        
-        true_labels = np.array(true_labels)
-        
-        # Extract embeddings
-        tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
-        
+
         # Predict
-        if method == "knn":
-            predictions, confidences = classifier.predict_knn(tile_embeddings, k=5)
+        tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
+
+        # [UPDATED]: Pass tile_images for binary OOD model
+        predictions, confidences, is_ood = classifier.predict_with_ood(
+            tile_embeddings,
+            prediction_method=prediction_method,
+            ood_method=ood_method,
+            tile_images=tile_images
+        )
+
+        # Store Data
+        all_true_labels.extend(true_labels)
+        all_predictions.extend(predictions)
+        all_is_ood.extend(is_ood)
+
+        # --- SAVE IMAGES BY CATEGORY ---
+        for idx in range(64):
+            t_lbl = true_labels[idx]
+            p_lbl = predictions[idx]
+            flagged = is_ood[idx]
+
+            # 1. FALSE REJECTION: Valid piece (0-12) flagged as OOD (Bad for User)
+            if (t_lbl != OOD_LABEL) and flagged:
+                fname = f"FalseReject_Board{board_id}_tile{idx}_True{t_lbl}_Pred{p_lbl}.png"
+                save_path = os.path.join(dir_false_reject, fname)
+                tile_images[idx].resize((224, 224)).save(save_path)
+
+            # 2. MISSED OOD: OOD piece (17) passed as valid (Bad for Safety)
+            elif (t_lbl == OOD_LABEL) and not flagged:
+                fname = f"MissedOOD_Board{board_id}_tile{idx}_Pred{p_lbl}_Conf{confidences[idx]:.2f}.png"
+                save_path = os.path.join(dir_missed_ood, fname)
+                tile_images[idx].resize((224, 224)).save(save_path)
+
+            # 3. CORRECT OOD: OOD piece (17) correctly flagged (Good!)
+            elif (t_lbl == OOD_LABEL) and flagged:
+                fname = f"CorrectOOD_Board{board_id}_tile{idx}_Pred{p_lbl}_Conf{confidences[idx]:.2f}.png"
+                save_path = os.path.join(dir_correct_ood, fname)
+                tile_images[idx].resize((224, 224)).save(save_path)
+
+    # ---------------------------------------------------------
+    # CALCULATE METRICS
+    # ---------------------------------------------------------
+    y_true = np.array(all_true_labels)
+    y_pred = np.array(all_predictions)
+    is_ood_flag = np.array(all_is_ood)
+
+    # Masks
+    ood_mask = (y_true == OOD_LABEL)  # The "Real" 17s
+    id_mask = ~ood_mask  # The Normal pieces (0-12)
+
+    # --- 1. OOD Detection Metrics ---
+    n_ood = np.sum(ood_mask)
+    if n_ood > 0:
+        ood_detected = np.sum(is_ood_flag[ood_mask])
+        ood_recall = ood_detected / n_ood
+    else:
+        ood_detected, ood_recall = 0, 0.0
+
+    # --- 2. ID Classification Metrics ---
+    n_id = np.sum(id_mask)
+    if n_id > 0:
+        id_rejected = np.sum(is_ood_flag[id_mask])
+        id_false_ood_rate = id_rejected / n_id
+
+        accepted_mask = id_mask & (~is_ood_flag)
+        n_accepted = np.sum(accepted_mask)
+
+        if n_accepted > 0:
+            correct_preds = np.sum(y_pred[accepted_mask] == y_true[accepted_mask])
+            clean_accuracy = correct_preds / n_accepted
         else:
-            predictions, confidences = classifier.predict_mahalanobis(tile_embeddings)
-        
-        # Compute accuracy for this board
-        correct = (predictions == true_labels).sum()
-        total_tiles += 64
-        correct_tiles += correct
-    
-    # Overall accuracy
-    accuracy = correct_tiles / total_tiles if total_tiles > 0 else 0
-    print(f"\n{'='*60}")
-    print(f"Test Results:")
-    print(f"  Total tiles: {total_tiles}")
-    print(f"  Correct: {correct_tiles}")
-    print(f"  Accuracy: {accuracy:.4f} ({accuracy*100:.2f}%)")
-    print(f"{'='*60}")
-    
-    return accuracy
+            clean_accuracy = 0.0
+
+        correct_id_cnt = np.sum((y_pred[id_mask] == y_true[id_mask]) & (~is_ood_flag[id_mask]))
+        total_correct = correct_id_cnt + ood_detected
+        overall_accuracy = total_correct / len(y_true)
+    else:
+        id_false_ood_rate, clean_accuracy, overall_accuracy = 0.0, 0.0, 0.0
+
+    # ---------------------------------------------------------
+    # PRINT RESULTS
+    # ---------------------------------------------------------
+    print(f"\n{'=' * 60}")
+    print(f"DETAILED TEST RESULTS")
+    print(f"{'=' * 60}")
+    print(f"Total Samples: {len(y_true)}")
+    print(f"  - Normal Pieces (0-12): {n_id}")
+    print(f"  - Anomalies (Class 17): {n_ood}")
+
+    print(f"\n1. OOD DETECTION (Goal: Catch the 17s)")
+    print(f"   Correctly Caught:     {ood_detected}/{n_ood}")
+    print(f"   OOD Recall:           {ood_recall * 100:.2f}%")
+
+    print(f"\n2. CLASSIFIER SAFETY (Goal: Don't reject normal pieces)")
+    print(f"   False Rejections:     {id_rejected}/{n_id}")
+    print(f"   False Rejection Rate: {id_false_ood_rate * 100:.2f}%")
+
+    print(f"\n3. CLASSIFIER ACCURACY (Goal: Predict correct class)")
+    print(f"   Clean Accuracy:       {clean_accuracy * 100:.2f}%")
+
+    print(f"\n4. SYSTEM OVERALL")
+    print(f"   Overall Accuracy:     {overall_accuracy * 100:.2f}%")
+    print(f"{'=' * 60}")
+
+    return overall_accuracy
 
 
 def main():
     """
-    Proper evaluation setup to avoid data leakage:
-    - Train set was used to fine-tune the embedding backbone
-    - Val set is used to build the KNN/Mahalanobis retrieval database
-    - Test set is used for final evaluation
+    Main execution pipeline.
     """
-    # Configuration
+    # ================= CONFIGURATION =================
     CHECKPOINT_PATH = "embedding/chess_encoder_finetuned_dino-small_backbone.pt"
     MODEL_TYPE = "dino-small"
-    STRATEGY = "backbone"  # "head-only", "backbone", or "lora"
-    
-    VAL_CSV = "data/splits/val.csv"  # Use val for database (NOT train - that was used for fine-tuning!)
+    STRATEGY = "backbone"
+
+    # [ADDED]: Binary Model Config
+    BINARY_MODEL_PATH = "embedding/binary_ood_dino_small_epoch3.pt"
+    BINARY_DINO_SIZE = "small"
+
+    VAL_CSV = "data/splits/val.csv"
     TEST_CSV = "data/splits/test.csv"
-    
-    print("="*80)
-    print("USING FINE-TUNED EMBEDDINGS WITH PER-TILE CLASSIFIER")
-    print("="*80)
-    print("\nDATA SPLIT STRATEGY (to avoid leakage):")
-    print("  - Train set: Used to fine-tune embedding backbone ✓")
-    print("  - Val set:   Used to build KNN/Mahalanobis database ← current step")
-    print("  - Test set:  Used for final evaluation")
-    
-    # Step 1: Load fine-tuned embedding model
+
+    # --- MODE SELECTION ---
+    DO_OPTIMIZATION = False  # Set True to find best Temp/Threshold
+    DO_EVALUATION = True  # Set True to run final test
+
+    # --- METHOD SELECTION ---
+    PREDICTION_METHOD = "knn"
+    OOD_METHOD = "binary_ood_model"
+
+    # =================================================
+
+    print("=" * 80)
+    print("CHESS CLASSIFIER: MIXED METHOD PIPELINE")
+    print("=" * 80)
+
+    # 1. LOAD MODEL
     print(f"\n1. Loading fine-tuned model...")
-    print(f"   Checkpoint: {CHECKPOINT_PATH}")
-    print(f"   Model: {MODEL_TYPE}")
-    print(f"   Strategy: {STRATEGY}")
-    
     embedding_model = load_finetuned_embedding_model(
         checkpoint_path=CHECKPOINT_PATH,
         model_type=MODEL_TYPE,
         strategy=STRATEGY
     )
-    
-    # Step 2: Initialize classifier with fine-tuned embeddings
-    print(f"\n2. Initializing FENClassifier with fine-tuned embeddings...")
-    classifier = FENClassifier(embedding_extractor=embedding_model)
-    
-    # Step 3: Load validation data for KNN/Mahalanobis database
-    print(f"\n3. Loading validation data from {VAL_CSV}...")
-    print(f"   (Using VAL not TRAIN to avoid leakage - train was used for fine-tuning)")
-    val_df = pd.read_csv(VAL_CSV)
-    board_ids = val_df['board_id'].unique()
-    print(f"   Found {len(board_ids)} validation boards")
-    
-    # Add validation boards to classifier database
-    print(f"\n4. Building per-tile database from validation set...")
-    for board_id in tqdm(board_ids, desc="Adding boards"):
-        board_df = val_df[val_df['board_id'] == board_id].copy()
-        
-        if len(board_df) != 64:
-            continue
-        
-        # Parse tile coordinates and sort by (row, col) to ensure correct ordering
-        board_df['tile_coords'] = board_df['image'].apply(parse_tile_coords)
-        board_df = board_df.sort_values('tile_coords')
-        
-        # Load tile images and labels in correct spatial order
-        tile_images = []
-        board_state = np.zeros((8, 8), dtype=int)
-        
-        for _, row in board_df.iterrows():
-            # Parse row/col from filename (guaranteed by sorting above)
-            tile_row, tile_col = parse_tile_coords(row['image'])
-            
-            # CSV paths are relative to project root (e.g., 'preprocessed_data/...')
-            img_path = Path(row['image'])
-            if not img_path.is_absolute():
-                img_path = Path.cwd() / img_path
-            
-            with Image.open(img_path) as im:
-                tile_images.append(im.convert('RGB').copy())
-            
-            board_state[tile_row, tile_col] = row['label']
-        
-        # Extract embeddings using fine-tuned model
-        tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
-        
-        # Add to classifier
-        classifier.add_fen_position(
-            fen=board_id,  # Use board_id as FEN placeholder
-            tile_embeddings=tile_embeddings,
-            board_state=board_state
-        )
-    
-    # Step 5: Build index
-    print(f"\n5. Building KNN/Mahalanobis indices...")
-    classifier.build_index()
-    
-    # Step 6: Evaluate on test set
-    print(f"\n6. Evaluating on test set...")
-    accuracy = evaluate_on_test_csv(
-        classifier=classifier,
-        test_csv_path=TEST_CSV,
-        method="mahalanobis"  # or "knn"
-    )
-    
-    print(f"\n✓ Done! Test accuracy: {accuracy:.4f}")
 
+    # 2. INITIALIZE CLASSIFIER
+    print(f"\n2. Initializing Classifier...")
+    classifier = FENClassifier(embedding_extractor=embedding_model)
+
+    # [ADDED]: Set the binary model
+    print(f"\n2b. Setting Binary OOD Model...")
+    classifier.set_binary_model(
+        checkpoint_path=BINARY_MODEL_PATH,
+        dino_size=BINARY_DINO_SIZE
+    )
+
+    needs_softmax = (
+            "softmax" in [PREDICTION_METHOD, OOD_METHOD] or
+            OOD_METHOD == "ensemble" or
+            DO_OPTIMIZATION
+    )
+
+    if needs_softmax:
+        head = load_classifier_head(CHECKPOINT_PATH, embedding_model.get_embedding_dim())
+        classifier.set_classifier_head(head)
+
+    # 3. OPTIMIZATION (Optional)
+    if DO_OPTIMIZATION:
+        grid_search_optimization(classifier, VAL_CSV)
+
+    # 4. BUILD KNN DATABASE
+    # We need this if prediction is KNN/Mahalanobis OR if OOD is KNN/Mahalanobis
+    need_database = "knn" in [PREDICTION_METHOD, OOD_METHOD] or "mahalanobis" in [PREDICTION_METHOD, OOD_METHOD]
+
+    if need_database:
+        print(f"\n4. Building Database from {VAL_CSV}...")
+        val_df = pd.read_csv(VAL_CSV)
+        board_ids = val_df['board_id'].unique()
+
+        for board_id in tqdm(board_ids, desc="Adding boards"):
+            board_df = val_df[val_df['board_id'] == board_id].copy()
+            if len(board_df) != 64: continue
+
+            board_df['tile_coords'] = board_df['image'].apply(parse_tile_coords)
+            board_df = board_df.sort_values('tile_coords')
+
+            tile_images = []
+            board_state = np.zeros((8, 8), dtype=int)
+
+            for _, row in board_df.iterrows():
+                img_path = Path(row['image'])
+                if not img_path.is_absolute(): img_path = Path.cwd() / img_path
+                with Image.open(img_path) as im:
+                    tile_images.append(im.convert('RGB').copy())
+                board_state[parse_tile_coords(row['image'])] = row['label']
+
+            tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
+            classifier.add_fen_position(board_id, tile_embeddings, board_state)
+
+        classifier.update_thresholds()
+        classifier.save("embedding/classifier_dino_small.pt")
+
+    # 5. EVALUATE
+    if DO_EVALUATION:
+        print(f"\n5. Evaluating on {TEST_CSV}...")
+
+        evaluate_on_test_csv(
+            classifier=classifier,
+            test_csv_path=TEST_CSV,
+            prediction_method=PREDICTION_METHOD,
+            ood_method=OOD_METHOD,
+            ood_output_dir="ood_inspection_images"
+        )
 
 if __name__ == "__main__":
     main()
