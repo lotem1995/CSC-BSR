@@ -21,10 +21,36 @@ On this GitHub Pages site, we will explore the final architecture and our reason
 ## Architecture
 Here, we will briefly describe the project's architecture. Each section has a dedicated page with more details.
 
+## Architecture
+
 <div class="bs-cards" markdown="block">
 
 <div class="bs-card" markdown="block">
 ### Pre-Processing
+Converting the frame into tile images  
+[Read more →](preprocessing.md){: .btn .btn-outline }
+</div>
+
+<div class="bs-card" markdown="block">
+### Tile Embedding
+Fine-tuned DINOv2 backbone based tile embedding. 
+[Read more →](tile_embedding.md){: .btn .btn-outline }
+</div>
+
+<div class="bs-card" markdown="block">
+### Tile + Board Classification and board reconstruction
+KNN tile classifier + DINOv2 binary OOD detection + board reconstruction. 
+[Read more →](tile_and_board_classification.md){: .btn .btn-outline }
+</div>
+</div>
+
+
+<!-- 
+## Training
+<div class="bs-cards" markdown="block">
+
+<div class="bs-card" markdown="block">
+### Pre-Processing and Creating the Dataset
 
 <!-- In this project, we received a couple of chess games, each divided into game frames (individual snapshots of the game at each move). To build a concrete standard dataset, we wrote a script that generates the dataset from the frames using a YAML (YAML Ain't Markup Language) configuration file, a human-readable data-serialization language. -->
 
@@ -108,4 +134,4 @@ Throughout the project, we experimented with various ideas and methods that we u
 
 <!-- You can read more about these experiments on the [Other Things We Tried](other_things_we_tried.md) page. -->
 [Read more →](other_things_we_tried.md){: .btn .btn-outline }
-</div>
+</div> -->
