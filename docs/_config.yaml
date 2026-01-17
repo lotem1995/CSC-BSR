@@ -1,0 +1,30 @@
+title: CSC-BSR
+description: Chessboard Square Classification and Board-State Reconstruction
+remote_theme: just-the-docs/just-the-docs
+
+# Default look
+color_scheme: boardstate-dark
+search_enabled: true
+heading_anchors: true
+
+aux_links:
+  "GitHub Repo":
+    - "https://github.com/lotem1995/CSC-BSR"
+
+# Callouts (you’ll use {: .note } etc.)
+callouts:
+  decision:
+    title: Key decision
+    color: purple
+  result:
+    title: Result
+    color: green
+  repro:
+    title: Repro tip
+    color: blue
+  warning:
+    title: Warning
+    color: yellow
+  danger:
+    title: Danger
+    color: red
