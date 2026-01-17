@@ -19,10 +19,8 @@ On this GitHub Pages site, we will explore the final architecture and our reason
 
 {: .repro }
 ## Architecture
-Here, we will briefly describe the project's architecture. Each section has a dedicated page with more details.
 
-## Architecture
-
+<!-- Here, we will briefly describe the project's architecture. Each section has a dedicated page with more details. -->
 <div class="bs-cards" markdown="block">
 
 <div class="bs-card" markdown="block">

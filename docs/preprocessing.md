@@ -14,10 +14,9 @@ We transform raw chess frames into **consistent 224×224 tile images** for both:
 The *exact same* slicing + normalization is used during evaluation/inference to avoid train–test mismatch.
 
 ## Quick links
-
-[Code: `predict_board.py`](https://github.com/lotem1995/CSC-BSR/blob/main/predict_board.py){: .btn .btn-purple .mr-2 }
 [Code: `preprocess_game_data.py`](https://github.com/lotem1995/CSC-BSR/blob/main/preprocessing/preprocess_game_data.py){: .btn .btn-outline .mr-2 }
 [Code: `build_dataset.py`](https://github.com/lotem1995/CSC-BSR/blob/main/preprocessing/build_dataset.py){: .btn .btn-outline }
+[Code: `splitting_images.py`](https://github.com/lotem1995/CSC-BSR/blob/main/preprocessing/splitting_images.py){: .btn .btn-outline }
 
 
 ## Pre-Processing frame into tile images when predicting a new board frame
@@ -29,6 +28,7 @@ The predict_board function in predict_board.py preprocesses chess frames for mod
 **Why tiles (not full boards)?** Splitting the board image into tiles simplifies classification. Processing the whole board would require labeling every possible board state, which is unfeasible. By extracting individual tiles, we dramatically reduce label complexity and can augment training data efficiently using fewer board images.
 
 # Pre-Processing and Creating the Dataset for training and evaluation
+
 The dataset consists of chess games, each split into multiple frames (one per move). We preprocess frames via a script using a YAML configuration file to standardize the data.
 
 We divided the dataset into training, validation, and test sets based on entire games, ensuring that all frames from the same game were included in a single set to prevent data leakage and reduce similarity between the sets.
@@ -38,6 +38,7 @@ Frames are converted into tile images and stored in the preprocessed_data direct
 Next, we detail the specific preprocessing and dataset building procedures.
 
 ## Pre-processing
+
 | Item | Value / Choice | Why it matters |
 |---|---:|---|
 | Tiles per frame | 64 | Reduce label complexity vs full-board labeling |
@@ -87,3 +88,7 @@ To balance learning, we equalize the distribution of tile classes in the train D
 
 #### OOD
 For out-of-distribution (OOD) images, we tag tiles from frames containing OOD elements (e.g., hands or foreign objects) and store them separately. These get a distinct dataset label, allowing the model to learn an 'unknown' class for OOD detection during inference.
+
+<!-- Analize the dataset -->
+## Dataset statistics
+{% include preprocessing_stats.md %}

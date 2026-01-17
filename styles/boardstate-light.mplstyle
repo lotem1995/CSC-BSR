@@ -1,0 +1,32 @@
+# BoardState — Light
+
+figure.facecolor:        #FBFBFD
+axes.facecolor:          #FFFFFF
+savefig.facecolor:       #FBFBFD
+
+text.color:              #141824
+axes.labelcolor:         #141824
+axes.titlecolor:         #0E1220
+xtick.color:             #5B667A
+ytick.color:             #5B667A
+
+axes.prop_cycle: cycler('color', ['#5B46D6', '#219653', '#F2994A', '#2D9CDB', '#EB5757', '#9B51E0'])
+
+axes.edgecolor:          #D8DDEA
+axes.linewidth:          1.0
+grid.color:              #D8DDEA
+grid.linewidth:          0.8
+grid.alpha:              0.8
+axes.grid:               True
+axes.axisbelow:          True
+
+font.family:             sans-serif
+font.sans-serif:         Inter, DejaVu Sans, Arial
+
+legend.frameon:          True
+legend.facecolor:        #FFFFFF
+legend.edgecolor:        #D8DDEA
+legend.framealpha:       0.95
+
+savefig.dpi:             200
+figure.dpi:              110

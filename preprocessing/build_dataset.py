@@ -290,6 +290,7 @@ def _gather_tiles(
     hands_dir: Path,
     embedding_dir: Optional[Path],
     embedding_ext: str,
+    tag_ood: bool = False,
 ) -> List[Dict]:
     raw_tiles_dir = raw_tiles_dir.expanduser().resolve()
     hands_dir = hands_dir.expanduser().resolve()
@@ -325,8 +326,7 @@ def _gather_tiles(
 
         is_hand = image_path.name in hand_tile_names
 
-        # If it's a hand tile -> force OOD label, do NOT require _class(\d+)
-        if is_hand:
+        if is_hand and tag_ood:
             label = 17
             relabeled_to_ood += 1
         else:
@@ -367,7 +367,7 @@ def _gather_tiles(
 
 
 
-def build_manifest(config_path: Path) -> Dict:
+def build_manifest(config_path: Path, tag_ood: bool = False) -> Dict:
     config = _load_config(config_path)
 
     # config is: ...\CSC-BSR\preprocessing\config.yaml
@@ -410,7 +410,7 @@ def build_manifest(config_path: Path) -> Dict:
         )
 
     # ✅ hands filtering happens BEFORE splitting and before manifest creation
-    tiles = _gather_tiles(raw_tiles_dir, hands_dir, embedding_dir_path, embedding_ext)
+    tiles = _gather_tiles(raw_tiles_dir, hands_dir, embedding_dir_path, embedding_ext, tag_ood=tag_ood)
 
     split_tiles = _group_stratified_split(tiles, split, known_game_names, NUM_CLASSES, seed)
 
@@ -428,6 +428,7 @@ def build_manifest(config_path: Path) -> Dict:
             "zero_padding": zero_padding,
             "path_root": str(path_root),
             "hands_dir": os.path.relpath(hands_dir, path_root),
+            "tag_ood": bool(tag_ood),
         },
         "classes": CLASS_MAP,
         "splits": {name: [] for name in split},
@@ -620,6 +621,11 @@ def main():
     parser = argparse.ArgumentParser(description="Build stratified game-level train/val/test splits.")
     parser.add_argument("--config", required=True, help="Path to JSON or YAML config file.")
     parser.add_argument(
+        "--tag_ood",
+        action="store_true",
+        help="If set, tag hand tiles as OOD (class 17).",
+    )
+    parser.add_argument(
         "--output",
         default=None,
         help="Optional output manifest path (default comes from config or data/manifest.json).",
@@ -632,7 +638,7 @@ def main():
     args = parser.parse_args()
 
     config_path = Path(args.config).expanduser().resolve()
-    manifest = build_manifest(config_path)
+    manifest = build_manifest(config_path, tag_ood=bool(args.tag_ood))
 
     output_path = (
         Path(args.output).expanduser().resolve()
