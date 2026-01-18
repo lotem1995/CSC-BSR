@@ -1,0 +1,55 @@
+# BoardState — Dark (robust across Matplotlib versions)
+
+# --- Figure / Axes surfaces ---
+figure.facecolor: "#0F1115"
+axes.facecolor: "#151A22"
+savefig.facecolor: "#0F1115"
+
+# --- Text ---
+text.color: "#E8EDF7"
+axes.labelcolor: "#E8EDF7"
+axes.titlecolor: "#F7F9FF"
+xtick.color: "#A9B4C7"
+ytick.color: "#A9B4C7"
+
+# --- Lines / color cycle ---
+axes.prop_cycle: cycler(color=["#7C5CFF", "#2ECC71", "#F2C94C", "#56CCF2", "#EB5757", "#BB6BD9"])
+
+# --- Grid / spines ---
+axes.edgecolor: "#2A3446"
+axes.linewidth: 1.0
+grid.color: "#2A3446"
+grid.linewidth: 0.8
+grid.alpha: 0.6
+axes.grid: True
+axes.axisbelow: True
+
+# --- Ticks ---
+xtick.direction: out
+ytick.direction: out
+xtick.major.size: 4
+ytick.major.size: 4
+xtick.minor.size: 2
+ytick.minor.size: 2
+
+# --- Fonts ---
+font.family: sans-serif
+font.sans-serif: Inter, DejaVu Sans, Arial
+axes.titlesize: 14
+axes.labelsize: 12
+xtick.labelsize: 10
+ytick.labelsize: 10
+legend.fontsize: 10
+
+# --- Legend ---
+legend.frameon: True
+legend.facecolor: "#151A22"
+legend.edgecolor: "#2A3446"
+legend.framealpha: 0.9
+
+# --- Saving ---
+savefig.dpi: 200
+figure.dpi: 110
+
+# --- Patches ---
+patch.edgecolor: "#2A3446"
