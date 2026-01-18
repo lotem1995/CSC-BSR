@@ -244,11 +244,11 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
     results = []
 
-    pred_methods = ['knn']
-    ood_methods = ['binary_ood_model']
+    # pred_methods = ['knn']
+    # ood_methods = ['binary_ood_model']
 
-    # pred_methods = ['knn', 'softmax', 'mahalanobis']
-    # ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
+    pred_methods = ['knn', 'softmax', 'mahalanobis']
+    ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
 
     total_runs = len(pred_methods) * len(ood_methods)
     pbar = tqdm(total=total_runs, desc="Benchmarking Combinations")
