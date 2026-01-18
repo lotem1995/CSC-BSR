@@ -513,12 +513,12 @@ def main():
     Main execution pipeline.
     """
     # ================= CONFIGURATION =================
-    CHECKPOINT_PATH = "embedding/chess_encoder_finetuned_dino-small_backbone.pt"
+    CHECKPOINT_PATH = "chess_encoder_finetuned_dino-small_backbone.pt"
     MODEL_TYPE = "dino-small"
     STRATEGY = "backbone"
 
     # [ADDED]: Binary Model Config
-    BINARY_MODEL_PATH = "embedding/binary_ood_dino_small_epoch3.pt"
+    BINARY_MODEL_PATH = "binary_ood_dino_small_epoch3.pt"
     BINARY_DINO_SIZE = "small"
 
     VAL_CSV = "data/splits/val.csv"
@@ -610,7 +610,7 @@ def main():
             classifier.add_fen_position(board_id, tile_embeddings, board_state)
 
         classifier.update_thresholds()
-        classifier.save("embedding/classifier_dino_small.pt")
+        classifier.save("classifier_dino_small.pt")
 
     # 5. EVALUATE
     if DO_EVALUATION:

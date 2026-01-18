@@ -103,18 +103,6 @@ def parse_tile_coords(image_path: str) -> tuple:
     if not match: raise ValueError(f"Cannot parse tile coordinates from: {image_path}")
     return int(match.group(1)), int(match.group(2))
 
-# -------------------------------------------------------------------------
-# [FIXED] get_label_safe: Critical for handling is_ood flag
-# -------------------------------------------------------------------------
-def get_label_safe(row):
-    """
-    Returns 17 if 'is_ood' is true, otherwise returns the original integer label.
-    """
-    # Check if is_ood exists and is truthy (1 or True)
-    if 'is_ood' in row and (row['is_ood'] == 1 or row['is_ood'] is True):
-        return 17
-    return int(row['label'])
-
 # ==================================================================================
 # 2. EVALUATION LOGIC
 # ==================================================================================
@@ -161,8 +149,17 @@ def evaluate_single_run(
             with Image.open(img_path) as im:
                 tile_images.append(im.convert('RGB').copy())
 
-            # [FIXED] Apply safe label logic here
-            true_labels.append(get_label_safe(row))
+            # [FIXED] Robustly check is_ood flag to determine True Label
+            is_ood_item = False
+            if 'is_ood' in row:
+                val = row['is_ood']
+                # Handle 1, "1", True, "True"
+                is_ood_item = (val == 1) or (val is True) or (str(val).lower() == 'true')
+
+            if is_ood_item:
+                true_labels.append(OOD_LABEL)
+            else:
+                true_labels.append(int(row['label']))
 
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
 
@@ -303,7 +300,7 @@ def main():
     CHECKPOINT_PATH = "chess_encoder_finetuned_dino-small_backbone.pt"
     MODEL_TYPE = "dino-small"
     STRATEGY = "backbone"
-    BINARY_MODEL_PATH = "binary_ood_dino_small_epoch3.pt"
+    BINARY_MODEL_PATH = "binary_ood_dino_small.pt" # Points to final model
     BINARY_DINO_SIZE = "small"
     VAL_CSV = "data/splits/val.csv"
     TEST_CSV = "data/splits/test.csv"
@@ -332,10 +329,17 @@ def main():
             if not img_path.is_absolute(): img_path = Path.cwd() / img_path
             with Image.open(img_path) as im:
                 tile_images.append(im.convert('RGB').copy())
-            r, c = parse_tile_coords(row['image'])
 
-            # This prevents hands (OOD) from entering the database as "rooks"
-            board_state[r, c] = get_label_safe(row)
+            # [FIXED] Prevent hands (OOD) from entering database as "Rooks"
+            is_ood_item = False
+            if 'is_ood' in row:
+                val = row['is_ood']
+                is_ood_item = (val == 1) or (val is True) or (str(val).lower() == 'true')
+
+            if is_ood_item:
+                board_state[parse_tile_coords(row['image'])] = 17
+            else:
+                board_state[parse_tile_coords(row['image'])] = int(row['label'])
 
         tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
         classifier.add_fen_position(board_id, tile_embeddings, board_state)
