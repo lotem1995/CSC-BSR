@@ -168,7 +168,7 @@ if __name__ == "__main__":
     loaded_classifier = load_models()
 
     # 2. Define Image Path
-    target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_039060.jpg"
+    target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_038976.jpg"
     print(f"Looking for image at: {target_image}")
 
     if target_image.exists():
