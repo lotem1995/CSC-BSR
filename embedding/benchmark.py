@@ -22,6 +22,8 @@ from tqdm import tqdm
 import re
 from typing import List
 
+from predict_board import load_models
+
 # --- PROJECT SETUP ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
@@ -230,8 +232,11 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
     results = []
 
-    pred_methods = ['knn', 'softmax', 'mahalanobis']
-    ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
+    pred_methods = ['knn']
+    ood_methods = ['binary_ood_model']
+
+    # pred_methods = ['knn', 'softmax', 'mahalanobis']
+    # ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
 
     total_runs = len(pred_methods) * len(ood_methods)
     pbar = tqdm(total=total_runs, desc="Benchmarking Combinations")
@@ -305,46 +310,7 @@ def main():
     VAL_CSV = "data/splits/val.csv"
     TEST_CSV = "data/splits/test.csv"
 
-    print("--- 1. Loading Models ---")
-    embedding_model = load_finetuned_embedding_model(CHECKPOINT_PATH, MODEL_TYPE, STRATEGY)
-    classifier = FENClassifier(embedding_extractor=embedding_model)
-
-    classifier.set_binary_model(BINARY_MODEL_PATH, dino_size=BINARY_DINO_SIZE)
-
-    head = load_classifier_head(CHECKPOINT_PATH, embedding_model.get_embedding_dim())
-    classifier.set_classifier_head(head)
-
-    print("--- 2. Building Database (for KNN/Mahalanobis) ---")
-    val_df = pd.read_csv(VAL_CSV)
-    board_ids = val_df['board_id'].unique()
-
-    for board_id in tqdm(board_ids, desc="Indexing"):
-        board_df = val_df[val_df['board_id'] == board_id]
-        if len(board_df) != 64: continue
-
-        tile_images = []
-        board_state = np.zeros((8, 8), dtype=int)
-        for _, row in board_df.iterrows():
-            img_path = Path(row['image'])
-            if not img_path.is_absolute(): img_path = Path.cwd() / img_path
-            with Image.open(img_path) as im:
-                tile_images.append(im.convert('RGB').copy())
-
-            # [FIXED] Prevent hands (OOD) from entering database as "Rooks"
-            is_ood_item = False
-            if 'is_ood' in row:
-                val = row['is_ood']
-                is_ood_item = (val == 1) or (val is True) or (str(val).lower() == 'true')
-
-            if is_ood_item:
-                board_state[parse_tile_coords(row['image'])] = 17
-            else:
-                board_state[parse_tile_coords(row['image'])] = int(row['label'])
-
-        tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
-        classifier.add_fen_position(board_id, tile_embeddings, board_state)
-
-    classifier.update_thresholds()
+    classifier = load_models()
 
     # --- 3. RUN ---
     run_benchmark_suite(classifier, TEST_CSV)
