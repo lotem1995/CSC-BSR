@@ -35,11 +35,12 @@ class ChessTilesCSV(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
         img_path = self.root / row.image
-        raw_label = int(row.label)
+        # raw_label = int(row.label)
 
         # Default to 0 if label not found (safety)
-        label = self.label_map.get(raw_label, 0)
-
+        # label = self.label_map.get(raw_label, 0)
+        label = int(row.label)
+        
         emb = row.embedding if isinstance(row.embedding, str) and row.embedding else None
 
         # CASE A: Using Pre-calculated Embeddings
