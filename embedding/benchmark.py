@@ -22,7 +22,19 @@ from tqdm import tqdm
 import re
 from typing import List
 
+# --- PROJECT SETUP (MOVED UP) ---
+# This must run BEFORE importing modules from the project root
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# --- NOW IMPORTS WILL WORK ---
 from predict_board import load_models
+from embedding.embedding_base import EmbeddingModel
+from embedding.classifier import FENClassifier
+from embedding.dinov2 import DINOv2Embedding
+from embedding.qwen3 import QwenVisionEmbedding
+
+# ... rest of the script ...
 
 # --- PROJECT SETUP ---
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
