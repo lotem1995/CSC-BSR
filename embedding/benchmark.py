@@ -323,6 +323,10 @@ def main():
     TEST_CSV = "data/splits/test.csv"
 
     classifier = load_models()
+    classifier.set_binary_model(BINARY_MODEL_PATH, dino_size=BINARY_DINO_SIZE)
+    embedding_model = load_finetuned_embedding_model(CHECKPOINT_PATH, MODEL_TYPE, STRATEGY)
+    head = load_classifier_head(CHECKPOINT_PATH, embedding_model.get_embedding_dim())
+    classifier.set_classifier_head(head)
 
     # --- 3. RUN ---
     run_benchmark_suite(classifier, TEST_CSV)
