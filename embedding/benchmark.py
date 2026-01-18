@@ -300,7 +300,7 @@ def main():
     CHECKPOINT_PATH = "chess_encoder_finetuned_dino-small_backbone.pt"
     MODEL_TYPE = "dino-small"
     STRATEGY = "backbone"
-    BINARY_MODEL_PATH = "binary_ood_dino_small.pt" # Points to final model
+    BINARY_MODEL_PATH = "binary_ood_dino_small_epoch3.pt" # Points to final model
     BINARY_DINO_SIZE = "small"
     VAL_CSV = "data/splits/val.csv"
     TEST_CSV = "data/splits/test.csv"
