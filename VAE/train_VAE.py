@@ -17,7 +17,7 @@ LATENT_DIM = 20
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # --- Validation Config ---
-PATIENCE = 10
+PATIENCE = 5
 MIN_DELTA = 0.1
 
 # --- Checkpoint Config ---
@@ -87,11 +87,11 @@ def train(train_loader, val_loader):
             # Save BEST model
             torch.save(model.state_dict(), "best_vae_model.pth")
             print("Validation loss improved. Saved best model.")
-        # else:
-        #     patience_counter += 1
-        #     if patience_counter >= PATIENCE:
-        #         print(f"Early stopping triggered at epoch {epoch + 1}")
-        #         break
+        else:
+            patience_counter += 1
+            if patience_counter >= PATIENCE:
+                print(f"Early stopping triggered at epoch {epoch + 1}")
+                break
 
     print("Training Complete!")
     return model
