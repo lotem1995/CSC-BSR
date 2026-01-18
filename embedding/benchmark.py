@@ -2,7 +2,7 @@
 Benchmark Suite for Chess Classifier
 
 This script runs a comprehensive evaluation of different prediction and OOD detection
-combinations (KNN, Softmax, Mahalanobis, Binary Model, etc.) on the test set.
+combinations on the test set.
 
 Usage:
     cd /home/lotems/Documents/DL_Oren/CSC-BSR
@@ -31,9 +31,8 @@ from embedding.classifier import FENClassifier
 from embedding.dinov2 import DINOv2Embedding
 from embedding.qwen3 import QwenVisionEmbedding
 
-
 # ==================================================================================
-# 1. HELPER CLASSES & FUNCTIONS (Replicated for standalone execution)
+# 1. HELPER CLASSES (Replicated for standalone execution)
 # ==================================================================================
 
 class FineTunedEmbeddingModel(EmbeddingModel):
@@ -51,7 +50,6 @@ class FineTunedEmbeddingModel(EmbeddingModel):
 
     def get_embedding_dim(self) -> int:
         return self.embedding_dim
-
 
 class FineTunedDINOBackbone(EmbeddingModel):
     def __init__(self, checkpoint_path: str, model_size: str = "small"):
@@ -72,25 +70,19 @@ class FineTunedDINOBackbone(EmbeddingModel):
     def get_embedding_dim(self) -> int:
         return self.embedding_dim
 
-
-def load_finetuned_embedding_model(checkpoint_path: str, model_type: str = "dino-small",
-                                   strategy: str = "head-only") -> EmbeddingModel:
+def load_finetuned_embedding_model(checkpoint_path: str, model_type: str = "dino-small", strategy: str = "head-only") -> EmbeddingModel:
     if strategy == "backbone":
         if "dino" in model_type.lower():
             size = model_type.split("-")[-1] if "-" in model_type else "small"
             return FineTunedDINOBackbone(checkpoint_path, model_size=size)
-        else:
-            raise ValueError("Backbone fine-tuning only supported for DINO models")
+        else: raise ValueError("Backbone fine-tuning only supported for DINO models")
     elif strategy == "head-only":
-        if model_type == "qwen":
-            base_model = QwenVisionEmbedding()
+        if model_type == "qwen": base_model = QwenVisionEmbedding()
         elif "dino" in model_type.lower():
             size = model_type.split("-")[-1] if "-" in model_type else "small"
             base_model = DINOv2Embedding(model_size=size)
         return FineTunedEmbeddingModel(checkpoint_path, base_model)
-    else:
-        raise ValueError(f"Unknown strategy: {strategy}")
-
+    else: raise ValueError(f"Unknown strategy: {strategy}")
 
 def load_classifier_head(checkpoint_path: str, embedding_dim: int) -> nn.Module:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -106,12 +98,10 @@ def load_classifier_head(checkpoint_path: str, embedding_dim: int) -> nn.Module:
     classifier.eval()
     return classifier
 
-
 def parse_tile_coords(image_path: str) -> tuple:
     match = re.search(r'_tile_row(\d+)_column(\d+)_', image_path)
     if not match: raise ValueError(f"Cannot parse tile coordinates from: {image_path}")
     return int(match.group(1)), int(match.group(2))
-
 
 # ==================================================================================
 # 2. EVALUATION LOGIC
@@ -225,7 +215,6 @@ def evaluate_single_run(
         "Clean_Acc": clean_acc
     }
 
-
 # ==================================================================================
 # 3. MAIN BENCHMARK LOOP
 # ==================================================================================
@@ -237,12 +226,12 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
     results = []
 
-    # Define combinations
-    # Prediction methods: How we decide the class if it IS NOT OOD
-    pred_methods = ['knn', 'softmax']
+    # --- COMBINATIONS ---
+    # Prediction: Determining class 0-12
+    # [CORRECTED]: Added 'mahalanobis' based on your implementation
+    pred_methods = ['knn', 'softmax', 'mahalanobis']
 
-    # OOD methods: How we decide IF it is OOD
-    # Note: 'mahalanobis' is an OOD method, usually paired with knn prediction
+    # OOD: Determining if it is Class 17
     ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
 
     total_runs = len(pred_methods) * len(ood_methods)
@@ -268,7 +257,6 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
                     "Status": "OK"
                 })
             except Exception as e:
-                # Log error but don't stop the whole suite
                 results.append({
                     "Prediction": pred,
                     "OOD_Method": ood,
@@ -286,18 +274,21 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
     # --- REPORTING ---
     df = pd.DataFrame(results)
 
-    # Formatting for display
     print(f"\n{'=' * 80}")
     print("FINAL LEADERBOARD (Sorted by Overall Accuracy)")
     print(f"{'=' * 80}")
 
-    df_display = df.sort_values("Overall Acc", ascending=False).copy()
+    if not df.empty and "Overall Acc" in df.columns:
+        df_display = df.sort_values("Overall Acc", ascending=False).copy()
 
-    # Convert to percentages
-    for col in ["Overall Acc", "OOD Recall", "False Rejection", "Clean Acc"]:
-        df_display[col] = (df_display[col] * 100).map("{:.2f}%".format)
+        # Format as percentages
+        for col in ["Overall Acc", "OOD Recall", "False Rejection", "Clean Acc"]:
+            if col in df_display.columns:
+                df_display[col] = (df_display[col] * 100).map("{:.2f}%".format)
 
-    print(df_display.to_string(index=False))
+        print(df_display.to_string(index=False))
+    else:
+        print("No results generated.")
 
     # Save to CSV
     os.makedirs("benchmark_results", exist_ok=True)
@@ -357,7 +348,6 @@ def main():
 
     # --- 3. RUN ---
     run_benchmark_suite(classifier, TEST_CSV)
-
 
 if __name__ == "__main__":
     main()
