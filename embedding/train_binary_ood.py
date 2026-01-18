@@ -4,7 +4,7 @@ import argparse
 import torch
 import torch.nn as nn
 import numpy as np
-from PIL import Image  # Added for _to_batch
+from PIL import Image
 from tqdm import tqdm
 from typing import Tuple, Dict
 from sklearn.metrics import accuracy_score, recall_score, precision_score, confusion_matrix
@@ -31,11 +31,14 @@ class BinaryDINOBackboneFineTuner:
     Class 1: Out-of-Distribution (Hands, Objects, etc.)
     """
 
-    def __init__(self, dino_model: DINOv2Embedding):
+    def __init__(self, dino_model: DINOv2Embedding, ood_lookup: Dict[str, int]):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.dino = dino_model
         self.model = dino_model.model
-        self.transform = dino_model.transform  # Store transform for _to_batch
+        self.transform = dino_model.transform
+
+        # We use this to fix the labels without touching load_dataset.py
+        self.ood_lookup = ood_lookup
 
         embedding_dim = dino_model.get_embedding_dim()
 
@@ -50,13 +53,13 @@ class BinaryDINOBackboneFineTuner:
         # Optimizer
         self.optimizer = torch.optim.AdamW(
             [
-                {"params": self.model.parameters(), "lr": 5e-6},  # Backbone (Slow)
-                {"params": self.classifier.parameters(), "lr": 1e-4},  # Head (Fast)
+                {"params": self.model.parameters(), "lr": 5e-6},
+                {"params": self.classifier.parameters(), "lr": 1e-4},
             ],
             weight_decay=0.01
         )
 
-        # Weighted Loss: OOD (Class 1) is rare (~7%), so we weight it heavily (8.0)
+        # Weighted Loss
         ood_weight = 8.0
         weights = torch.tensor([1.0, ood_weight]).to(self.device)
         self.criterion = nn.CrossEntropyLoss(weight=weights)
@@ -65,40 +68,41 @@ class BinaryDINOBackboneFineTuner:
 
     def _to_batch(self, image_tensors):
         """
-        Robustly handles image resizing.
-        Takes whatever the DataLoader gives (e.g., 224x224 Tensors),
-        converts back to PIL, and applies DINO's specific transform (518x518).
+        Takes 224x224 tensors from loader, converts to PIL,
+        then applies DINO's 518x518 transform.
         """
         images = []
-        # 1. Convert Tensor back to PIL
         for img_tensor in image_tensors:
             img_np = (img_tensor.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
             images.append(Image.fromarray(img_np))
 
-        # 2. Apply DINO's transform (Resizes to 518, Normalizes, etc.)
         batch_x = []
         for img in images:
             x = self.transform(img).unsqueeze(0)
             batch_x.append(x)
 
-        # 3. Return correct tensor on device
         return torch.cat(batch_x, dim=0).to(self.device)
 
-    def _get_binary_labels(self, raw_labels):
+    def _get_binary_labels_from_paths(self, paths):
         """
-        Map {0..16} -> 0 (ID)
-        Map {17}    -> 1 (OOD)
+        Ignores the incoming label and looks up the TRUE OOD status via file path.
         """
-        binary_labels = (raw_labels == 17).long()
-        return binary_labels.to(self.device)
+        clean_labels = []
+        for p in paths:
+            # Default to 0 (ID) if path not found, but it should be found
+            label = self.ood_lookup.get(p, 0)
+            clean_labels.append(label)
+
+        return torch.tensor(clean_labels, dtype=torch.long).to(self.device)
 
     def train_batch(self, batch: Dict) -> float:
         self.model.train()
         self.classifier.train()
 
-        # [CHANGED] Use _to_batch to handle resizing automatically
         x = self._to_batch(batch["image"])
-        labels = self._get_binary_labels(batch["label"])
+
+        # [CHANGED] Look up label by path instead of trusting batch['label']
+        labels = self._get_binary_labels_from_paths(batch["path"])
 
         # Forward Pass
         feats = self.model(x)
@@ -117,15 +121,15 @@ class BinaryDINOBackboneFineTuner:
         self.model.eval()
         self.classifier.eval()
 
-        # [CHANGED] Use _to_batch here too
         x = self._to_batch(batch["image"])
-        labels = self._get_binary_labels(batch["label"])
+
+        # [CHANGED] Look up label by path
+        labels = self._get_binary_labels_from_paths(batch["path"])
 
         feats = self.model(x)
         logits = self.classifier(feats)
         loss = self.criterion(logits, labels).item()
 
-        # Predictions
         probs = torch.softmax(logits, dim=1)
         preds = torch.argmax(probs, dim=1)
 
@@ -142,27 +146,59 @@ class BinaryDINOBackboneFineTuner:
         }, path)
 
 
+def build_ood_lookup(dataset):
+    """
+    Scans the dataset's internal DataFrame to map absolute file paths to OOD status.
+    This bypasses the logic in __getitem__.
+    """
+    lookup = {}
+    print(f"Building OOD lookup for {len(dataset)} items...")
+
+    # Access the dataframe and root directly from the dataset object
+    # (Assuming Dataset class has .df and .root as per your code)
+    root = dataset.root
+
+    for _, row in dataset.df.iterrows():
+        # Reconstruct the exact path string that __getitem__ returns
+        full_path = str(root / row['image'])
+
+        # Robustly check is_ood (handle bool, int, or string "True")
+        val = row.get('is_ood', False)
+        if isinstance(val, str):
+            is_ood = val.lower() == 'true' or val == '1'
+        else:
+            is_ood = bool(val)
+
+        lookup[full_path] = 1 if is_ood else 0
+
+    return lookup
+
+
 def train_binary_ood(
         epochs: int = 5,
-        batch_size: int = 8,  # Kept small (8) because 518px images use a lot of VRAM
+        batch_size: int = 8,
         dino_size: str = "small",
         num_workers: int = 2
 ):
-    # 1. Initialize Model
-    logger.info(f"Initializing DINOv2-{dino_size} for Binary OOD...")
-    dino_model = DINOv2Embedding(model_size=dino_size)
-    trainer = BinaryDINOBackboneFineTuner(dino_model)
-
-    # 2. Data Loaders
-    # NOTE: We can now use standard 224 resize in loader, saving memory/time
-    # The trainer's _to_batch will handle the upscale to 518.
-    logger.info("Loading Datasets via get_train_dataloader...")
-
-    # Passing resize=224 is safe now!
-    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers)  # default resize is 224
+    # 1. Initialize Loaders first to get access to the CSV data
+    logger.info("Loading Datasets...")
+    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers)
     val_loader = get_val_dataloader(batch_size=batch_size, num_workers=num_workers)
 
-    # 3. Training Loop
+    # 2. Build the Global OOD Lookup Map
+    # We combine train and val lookups into one giant dictionary
+    train_lookup = build_ood_lookup(train_loader.dataset)
+    val_lookup = build_ood_lookup(val_loader.dataset)
+    global_lookup = {**train_lookup, **val_lookup}
+
+    # 3. Initialize Model with the lookup
+    logger.info(f"Initializing DINOv2-{dino_size} for Binary OOD...")
+    dino_model = DINOv2Embedding(model_size=dino_size)
+
+    # Pass the lookup to the trainer
+    trainer = BinaryDINOBackboneFineTuner(dino_model, ood_lookup=global_lookup)
+
+    # 4. Training Loop
     logger.info("Starting Binary Training...")
 
     for epoch in range(epochs):
@@ -196,21 +232,22 @@ def train_binary_ood(
         y_pred = np.array(all_pred)
 
         acc = accuracy_score(y_true, y_pred)
-        rec = recall_score(y_true, y_pred, pos_label=1, zero_division=0)  # OOD Recall
-        prec = precision_score(y_true, y_pred, pos_label=1, zero_division=0)  # OOD Precision
+        rec = recall_score(y_true, y_pred, pos_label=1, zero_division=0)
 
         cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+        # Safe access to confusion matrix elements
+        false_alarms = cm[0, 1] if cm.shape == (2, 2) else 0
 
         logger.info(f"  Val Loss: {avg_val_loss:.4f}")
         logger.info(f"  Accuracy: {acc:.4f}")
         logger.info(f"  OOD Recall (Caught): {rec:.4f}")
-        logger.info(f"  False Alarms: {cm[0, 1]}")
+        logger.info(f"  False Alarms: {false_alarms}")
 
         epoch_path = f"embedding/binary_ood_dino_{dino_size}_epoch{epoch + 1}.pt"
         trainer.save(epoch_path)
         logger.info(f"  -> Saved Checkpoint: {epoch_path}")
 
-    # 4. Save
+    # 5. Save Final
     output_path = f"embedding/binary_ood_dino_{dino_size}.pt"
     trainer.save(output_path)
     logger.info(f"✓ Model saved to {output_path}")
