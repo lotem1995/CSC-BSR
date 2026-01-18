@@ -132,8 +132,11 @@ def evaluate_single_run(
     all_pred = []
     all_ood_flags = []
 
+    # --- ADDED: Inner Progress Bar to see speed per board ---
+    pbar = tqdm(board_ids, desc=f"  > Eval {prediction_method}+{ood_method}", leave=False)
+
     # Run Prediction Loop
-    for board_id in board_ids:
+    for board_id in pbar:
         board_df = df[df['board_id'] == board_id].copy()
         if len(board_df) != 64: continue
 
@@ -142,6 +145,8 @@ def evaluate_single_run(
 
         tile_images = []
         true_labels = []
+
+        # Load images
         for _, row in board_df.iterrows():
             img_path = Path(row['image'])
             if not img_path.is_absolute(): img_path = Path.cwd() / img_path
@@ -149,6 +154,7 @@ def evaluate_single_run(
                 tile_images.append(im.convert('RGB').copy())
             true_labels.append(row['label'])
 
+        # Extract embeddings
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
 
         # Predict
@@ -180,6 +186,9 @@ def evaluate_single_run(
                 fname = f"{board_id}_tile{i}_Pred{p_lbl}_Conf{confs[i]:.2f}.png"
                 tile_images[i].save(os.path.join(dir_missed_ood, fname))
                 failures += 1
+
+    # Close the inner bar so it doesn't mess up the outer one
+    pbar.close()
 
     # Calculate Metrics
     y_true = np.array(all_true)
