@@ -32,7 +32,7 @@ from embedding.dinov2 import DINOv2Embedding
 from embedding.qwen3 import QwenVisionEmbedding
 
 # ==================================================================================
-# 1. HELPER CLASSES (Replicated for standalone execution)
+# 1. HELPER CLASSES
 # ==================================================================================
 
 class FineTunedEmbeddingModel(EmbeddingModel):
@@ -103,6 +103,18 @@ def parse_tile_coords(image_path: str) -> tuple:
     if not match: raise ValueError(f"Cannot parse tile coordinates from: {image_path}")
     return int(match.group(1)), int(match.group(2))
 
+# -------------------------------------------------------------------------
+# [FIXED] get_label_safe: Critical for handling is_ood flag
+# -------------------------------------------------------------------------
+def get_label_safe(row):
+    """
+    Returns 17 if 'is_ood' is true, otherwise returns the original integer label.
+    """
+    # Check if is_ood exists and is truthy (1 or True)
+    if 'is_ood' in row and (row['is_ood'] == 1 or row['is_ood'] is True):
+        return 17
+    return int(row['label'])
+
 # ==================================================================================
 # 2. EVALUATION LOGIC
 # ==================================================================================
@@ -117,7 +129,6 @@ def evaluate_single_run(
     """
     Executes one evaluation run and returns a dictionary of metrics.
     """
-    # Create directory for failure images
     if os.path.exists(output_dir): shutil.rmtree(output_dir)
     dir_false_reject = os.path.join(output_dir, "false_rejections")
     dir_missed_ood = os.path.join(output_dir, "missed_ood")
@@ -132,10 +143,8 @@ def evaluate_single_run(
     all_pred = []
     all_ood_flags = []
 
-    # --- ADDED: Inner Progress Bar to see speed per board ---
     pbar = tqdm(board_ids, desc=f"  > Eval {prediction_method}+{ood_method}", leave=False)
 
-    # Run Prediction Loop
     for board_id in pbar:
         board_df = df[df['board_id'] == board_id].copy()
         if len(board_df) != 64: continue
@@ -146,18 +155,17 @@ def evaluate_single_run(
         tile_images = []
         true_labels = []
 
-        # Load images
         for _, row in board_df.iterrows():
             img_path = Path(row['image'])
             if not img_path.is_absolute(): img_path = Path.cwd() / img_path
             with Image.open(img_path) as im:
                 tile_images.append(im.convert('RGB').copy())
-            true_labels.append(row['label'])
 
-        # Extract embeddings
+            # [FIXED] Apply safe label logic here
+            true_labels.append(get_label_safe(row))
+
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
 
-        # Predict
         preds, confs, is_ood = classifier.predict_with_ood(
             tile_embeddings,
             prediction_method=prediction_method,
@@ -169,28 +177,23 @@ def evaluate_single_run(
         all_pred.extend(preds)
         all_ood_flags.extend(is_ood)
 
-        # Save specific failure cases (limit to 5 per board to save space/time)
         failures = 0
         for i in range(64):
             if failures > 5: break
             t_lbl, p_lbl, flagged = true_labels[i], preds[i], is_ood[i]
 
-            # Save False Rejections (Valid piece flagged OOD)
             if t_lbl != OOD_LABEL and flagged:
                 fname = f"{board_id}_tile{i}_True{t_lbl}_Pred{p_lbl}.png"
                 tile_images[i].save(os.path.join(dir_false_reject, fname))
                 failures += 1
 
-            # Save Missed OOD (OOD piece allowed in)
             elif t_lbl == OOD_LABEL and not flagged:
                 fname = f"{board_id}_tile{i}_Pred{p_lbl}_Conf{confs[i]:.2f}.png"
                 tile_images[i].save(os.path.join(dir_missed_ood, fname))
                 failures += 1
 
-    # Close the inner bar so it doesn't mess up the outer one
     pbar.close()
 
-    # Calculate Metrics
     y_true = np.array(all_true)
     y_pred = np.array(all_pred)
     is_ood = np.array(all_ood_flags)
@@ -198,21 +201,16 @@ def evaluate_single_run(
     ood_mask = (y_true == OOD_LABEL)
     id_mask = ~ood_mask
 
-    # 1. OOD Recall (Caught / Total OOD)
     n_ood = np.sum(ood_mask)
     ood_recall = np.sum(is_ood[ood_mask]) / n_ood if n_ood > 0 else 0.0
 
-    # 2. False Rejection Rate (Flagged Valid / Total Valid)
     n_id = np.sum(id_mask)
     false_reject_rate = np.sum(is_ood[id_mask]) / n_id if n_id > 0 else 0.0
 
-    # 3. Clean Accuracy (Correct Class / Total Accepted Valid)
     accepted_mask = id_mask & (~is_ood)
     n_accepted = np.sum(accepted_mask)
     clean_acc = np.sum(y_pred[accepted_mask] == y_true[accepted_mask]) / n_accepted if n_accepted > 0 else 0.0
 
-    # 4. Overall Accuracy
-    # (Correctly accepted valid ID + Correctly rejected OOD) / Total
     correct_id_cnt = np.sum((y_pred[id_mask] == y_true[id_mask]) & (~is_ood[id_mask]))
     ood_detected_cnt = np.sum(is_ood[ood_mask])
     overall_acc = (correct_id_cnt + ood_detected_cnt) / len(y_true)
@@ -235,12 +233,7 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
     results = []
 
-    # --- COMBINATIONS ---
-    # Prediction: Determining class 0-12
-    # [CORRECTED]: Added 'mahalanobis' based on your implementation
     pred_methods = ['knn', 'softmax', 'mahalanobis']
-
-    # OOD: Determining if it is Class 17
     ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
 
     total_runs = len(pred_methods) * len(ood_methods)
@@ -280,7 +273,6 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
     pbar.close()
 
-    # --- REPORTING ---
     df = pd.DataFrame(results)
 
     print(f"\n{'=' * 80}")
@@ -289,17 +281,13 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
     if not df.empty and "Overall Acc" in df.columns:
         df_display = df.sort_values("Overall Acc", ascending=False).copy()
-
-        # Format as percentages
         for col in ["Overall Acc", "OOD Recall", "False Rejection", "Clean Acc"]:
             if col in df_display.columns:
                 df_display[col] = (df_display[col] * 100).map("{:.2f}%".format)
-
         print(df_display.to_string(index=False))
     else:
         print("No results generated.")
 
-    # Save to CSV
     os.makedirs("benchmark_results", exist_ok=True)
     csv_path = "benchmark_results/leaderboard.csv"
     df.to_csv(csv_path, index=False)
@@ -312,10 +300,10 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
 def main():
     # --- CONFIG ---
-    CHECKPOINT_PATH = "embedding/chess_encoder_finetuned_dino-small_backbone.pt"
+    CHECKPOINT_PATH = "chess_encoder_finetuned_dino-small_backbone.pt"
     MODEL_TYPE = "dino-small"
     STRATEGY = "backbone"
-    BINARY_MODEL_PATH = "embedding/binary_ood_dino_small_epoch3.pt"
+    BINARY_MODEL_PATH = "binary_ood_dino_small_epoch3.pt"
     BINARY_DINO_SIZE = "small"
     VAL_CSV = "data/splits/val.csv"
     TEST_CSV = "data/splits/test.csv"
@@ -324,10 +312,8 @@ def main():
     embedding_model = load_finetuned_embedding_model(CHECKPOINT_PATH, MODEL_TYPE, STRATEGY)
     classifier = FENClassifier(embedding_extractor=embedding_model)
 
-    # Load Binary Model
     classifier.set_binary_model(BINARY_MODEL_PATH, dino_size=BINARY_DINO_SIZE)
 
-    # Load Softmax Head
     head = load_classifier_head(CHECKPOINT_PATH, embedding_model.get_embedding_dim())
     classifier.set_classifier_head(head)
 
@@ -339,7 +325,6 @@ def main():
         board_df = val_df[val_df['board_id'] == board_id]
         if len(board_df) != 64: continue
 
-        # Prepare batch
         tile_images = []
         board_state = np.zeros((8, 8), dtype=int)
         for _, row in board_df.iterrows():
@@ -348,7 +333,9 @@ def main():
             with Image.open(img_path) as im:
                 tile_images.append(im.convert('RGB').copy())
             r, c = parse_tile_coords(row['image'])
-            board_state[r, c] = row['label']
+
+            # This prevents hands (OOD) from entering the database as "rooks"
+            board_state[r, c] = get_label_safe(row)
 
         tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
         classifier.add_fen_position(board_id, tile_embeddings, board_state)
