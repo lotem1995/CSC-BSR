@@ -1,6 +1,6 @@
-# Source game data (CSV + tagged_images) and where to write square tiles
+# Source game data (preferred: images/ + gt.csv, fallback: tagged_images/ + gameX.csv) and where to write square tiles
 data_root: ./data
-raw_tiles_dir: ./preprocessed_data
+raw_tiles_dir: ./data/preprocessed_data
 
 # Tile extraction parameters
 tile_size: [224, 224]

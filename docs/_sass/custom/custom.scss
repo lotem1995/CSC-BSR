@@ -1,0 +1,46 @@
+/* Subtle chessboard hero background + cards */
+
+.bs-hero {
+  position: relative;
+  padding: 2.25rem 1.25rem;
+  border: 1px solid $border-color;
+  border-radius: 16px;
+  background: $sidebar-color;
+  overflow: hidden;
+}
+
+.bs-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.08;
+  background-image:
+    linear-gradient(90deg, rgba(124,92,255,.35) 1px, transparent 1px),
+    linear-gradient(rgba(124,92,255,.35) 1px, transparent 1px);
+  background-size: 32px 32px;
+  mask-image: radial-gradient(circle at 30% 25%, black 0%, transparent 70%);
+}
+
+.bs-hero > * { position: relative; }
+
+.bs-cards {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+.bs-card {
+  grid-column: span 12;
+  border: 1px solid $border-color;
+  border-radius: 14px;
+  padding: 1rem;
+  background: $body-background-color;
+}
+
+@media (min-width: 900px) {
+  .bs-card { grid-column: span 6; }
+}
+
+.bs-card h3 { margin-top: 0.25rem; }
+.bs-card p { margin-bottom: 0.5rem; color: $body-text-color; opacity: 0.92; }
