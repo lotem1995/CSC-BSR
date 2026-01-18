@@ -105,69 +105,6 @@ def _identify_game(board_id: str, known_games: List[str]) -> str:
     return board_id  # Fallback: treat the board as the atomic unit
 
 
-<<<<<<< HEAD
-def _group_stratified_split(
-        tiles: List[Dict],
-        split: Dict[str, Any],  # Changed type hint to Any
-        known_games: List[str],
-        num_classes: int = NUM_CLASSES,
-        seed: int = 42,
-) -> Dict[str, List[str]]:
-    random.seed(seed)
-
-    # 1. Group tiles by Board
-    boards = _group_tiles_by_board(tiles)
-
-    # 2. Group Boards by Game
-    games: Dict[str, List[str]] = defaultdict(list)
-    for board_id in boards:
-        game_id = _identify_game(board_id, known_games)
-        games[game_id].append(board_id)
-
-    # CHECK: Is this a manual split (lists) or automatic (ratios)?
-    is_manual = all(isinstance(v, list) for v in split.values())
-
-    if is_manual:
-        # --- Manual Assignment Logic ---
-        game_assignments = {}
-        for game_id in games:
-            assigned_split = None
-
-            # Check which list this game belongs to in the yaml
-            for split_name, game_list in split.items():
-                if game_id in game_list:
-                    assigned_split = split_name
-                    break
-
-            # If game found on disk but not in yaml, warn and default to train
-            if assigned_split is None:
-                print(f"[WARNING] Game '{game_id}' found on disk but not in YAML split config. Defaulting to 'train'.")
-                assigned_split = "train"
-
-            game_assignments[game_id] = assigned_split
-
-    else:
-        # --- Existing Automatic Stratification Logic ---
-        # 3. Compute Class Counts per Game
-        game_class_counts = _compute_game_class_counts(games, boards, num_classes)
-
-        total_counts = sum(game_class_counts.values())
-        desired = _desired_class_counts(total_counts, split)
-
-        # 4. Assign Games to Splits
-        game_assignments = _assign_groups(
-            game_class_counts,
-            split,
-            len(games),
-            seed,
-        )
-
-    # 5. Expand back to tiles (Common for both methods)
-    return _collect_split_tiles_by_game(games, boards, game_assignments, split)
-
-
-=======
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
 def _group_tiles_by_board(tiles: List[Dict]) -> Dict[str, List[Dict]]:
     boards: Dict[str, List[Dict]] = defaultdict(list)
     for tile in tiles:
@@ -307,13 +244,8 @@ def _gather_tiles(
     marked_ood = 0
 
     tiles: List[Dict] = []
-<<<<<<< HEAD
-    for image_path in tqdm(sorted(raw_png_paths), desc="Gathering tiles", unit="tile"):
-        # Safety: if hands_dir is inside raw_tiles_dir, do NOT ingest the copies inside hands_dir
-=======
     for image_path in sorted(raw_png_paths):
         # Safety: if hands_dir is inside raw_tiles_dir, do NOT ingest copies inside hands_dir
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
         try:
             image_path.resolve().relative_to(hands_dir)
             dropped_inside_hands += 1
@@ -323,16 +255,6 @@ def _gather_tiles(
 
         is_hand = image_path.name in hand_tile_names
 
-<<<<<<< HEAD
-        if is_hand and tag_ood:
-            label = 17
-            relabeled_to_ood += 1
-        else:
-            label = _extract_label(image_path)
-            if label is None:
-                skipped_no_label += 1
-                continue
-=======
         # Always require label from filename (from slicing filenames)
         label = _extract_label(image_path)
         if label is None:
@@ -347,7 +269,6 @@ def _gather_tiles(
 
         if is_hand:
             marked_ood += 1
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
 
         board_id = _board_id_from_tile(image_path)
 
@@ -381,88 +302,6 @@ def _gather_tiles(
     return tiles
 
 
-<<<<<<< HEAD
-
-def build_manifest(config_path: Path, tag_ood: bool = False) -> Dict:
-    config = _load_config(config_path)
-
-    # config is: ...\CSC-BSR\preprocessing\config.yaml
-    # so project root is: ...\CSC-BSR
-    project_root = config_path.parents[1].expanduser().resolve()
-
-    # hands is a folder in CSC-BSR root
-    hands_dir = Path(config.get("hands_dir", project_root / "hands")).expanduser().resolve()
-
-    print("[DEBUG] config_path =", config_path)
-    print("[DEBUG] project_root =", project_root)
-    print("[DEBUG] hands_dir =", hands_dir)
-
-    raw_tiles_dir, data_root_path, embedding_dir_path = _resolve_paths(config)
-    path_root = _compute_path_root(config_path, raw_tiles_dir, data_root_path, embedding_dir_path)
-    final_size, overlap_percent, zero_padding = _parse_tile_params(config)
-    embedding_ext = config.get("embedding_ext", ".npy")
-    split = _validate_split(config.get("split", DEFAULT_SPLIT))
-    seed = int(config.get("seed", 42))
-
-    known_game_names: List[str] = []
-
-    if data_root_path:
-        games_found = _discover_games(data_root_path)
-        known_game_names = [g_name for g_name, _, _ in games_found]
-
-        print("\n" + "=" * 60)
-        print(f" [INFO] DETECTED {len(known_game_names)} GAMES IN '{data_root_path}':")
-        print(" (Use these exact names in your dataset_config.yaml)")
-        for name in known_game_names:
-            print(f"   - {name}")
-        print("=" * 60 + "\n")
-
-        _generate_tiles_from_games(
-            games_found,
-            raw_tiles_dir,
-            overlap_percent,
-            final_size,
-            zero_padding,
-        )
-
-    # ✅ hands filtering happens BEFORE splitting and before manifest creation
-    tiles = _gather_tiles(raw_tiles_dir, hands_dir, embedding_dir_path, embedding_ext, tag_ood=tag_ood)
-
-    split_tiles = _group_stratified_split(tiles, split, known_game_names, NUM_CLASSES, seed)
-
-    # Store relative paths in manifest for portability
-    manifest = {
-        "config": {
-            "raw_tiles_dir": os.path.relpath(raw_tiles_dir, path_root),
-            "data_root": os.path.relpath(data_root_path, path_root) if data_root_path else None,
-            "embedding_dir": os.path.relpath(embedding_dir_path, path_root) if embedding_dir_path else None,
-            "embedding_ext": embedding_ext,
-            "split": split,
-            "seed": seed,
-            "tile_size": list(final_size),
-            "tile_overlap": overlap_percent,
-            "zero_padding": zero_padding,
-            "path_root": str(path_root),
-            "hands_dir": os.path.relpath(hands_dir, path_root),
-            "tag_ood": bool(tag_ood),
-        },
-        "classes": CLASS_MAP,
-        "splits": {name: [] for name in split},
-    }
-
-    tiles_by_path = {tile["image"]: tile for tile in tiles}
-    for split_name, image_paths in tqdm(split_tiles.items(), desc="Building manifest splits", unit="split"):
-        for image_path in tqdm(image_paths, desc=f"Split: {split_name}", unit="sample", leave=False):
-            tile = tiles_by_path[image_path]
-            manifest["splits"][split_name].append(_relativize_sample(tile, path_root))
-
-    print("[DEBUG] manifest split sizes:", {k: len(v) for k, v in manifest["splits"].items()})
-
-    return manifest
-
-
-=======
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
 def _compute_path_root(
         config_path: Path,
         raw_tiles_dir: Path,
@@ -506,26 +345,6 @@ def _parse_tile_params(config: Dict) -> Tuple[Tuple[int, int], float, bool]:
     return final_size, overlap_percent, zero_padding
 
 
-<<<<<<< HEAD
-def save_manifest(manifest: Dict, output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(manifest, handle, indent=2)
-
-
-def save_split_indices(manifest: Dict, output_dir: Path) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for split_name, samples in tqdm(manifest["splits"].items(), desc="Saving split indices", unit="split"):
-        csv_path = output_dir / f"{split_name}.csv"
-        with csv_path.open("w", encoding="utf-8") as handle:
-            handle.write("image,label,board_id,embedding\n")
-            for sample in tqdm(samples, desc=f"Writing {split_name}", unit="sample", leave=False):
-                embedding = sample.get("embedding") or ""
-                handle.write(f"{sample['image']},{sample['label']},{sample['board_id']},{embedding}\n")
-
-
-=======
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
 def _generate_tiles_from_games(
         games_list: List[Tuple[str, Path, Path]],
         raw_tiles_dir: Path,
@@ -569,21 +388,8 @@ def _discover_games(data_root: Path) -> List[Tuple[str, Path, Path]]:
 
         if not csv_files or not images_dir.exists():
             continue
-<<<<<<< HEAD
-        csv_path = csv_files[0]
-
-        # Use folder name or CSV stem as game name; strip suffix if present
-        game_name = csv_path.stem
-        if game_name == "gt":
-            game_name = game_dir.name
-        if game_name.endswith("_per_frame"):
-            game_name = game_name.replace("_per_frame", "")
-
-        games.append((game_name, csv_path, images_dir))
-=======
         game_name = csv_files[0].stem
         games.append((game_name, csv_files[0], images_dir))
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
     if not games:
         raise RuntimeError(f"No game folders with CSV and tagged_images found under {data_root}")
     return games
@@ -737,22 +543,8 @@ class ChessSquaresDataset(Dataset):
 
 
 def main():
-<<<<<<< HEAD
-    parser = argparse.ArgumentParser(description="Build stratified game-level train/val/test splits.")
-    parser.add_argument("--config", required=True, help="Path to JSON or YAML config file.")
-    parser.add_argument(
-        "--tag_ood",
-        action="store_true",
-        help="If set, tag hand tiles as OOD (class 17).",
-    )
-    parser.add_argument(
-        "--output",
-        default=None,
-        help="Optional output manifest path (default comes from config or data/manifest.json).",
-=======
     parser = argparse.ArgumentParser(
         description="Build dataset_manifest.json + train/val/test CSVs under ROOT/data (with OOD boolean flag)."
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
     )
 
     # make config optional
@@ -764,10 +556,6 @@ def main():
     )
     args = parser.parse_args()
 
-<<<<<<< HEAD
-    config_path = Path(args.config).expanduser().resolve()
-    manifest = build_manifest(config_path, tag_ood=bool(args.tag_ood))
-=======
     # Determine project root as: directory containing this file's parent (preprocessing)
     # build_dataset.py is in ROOT/preprocessing/build_dataset.py
     this_file = Path(__file__).resolve()
@@ -792,7 +580,6 @@ def main():
             )
 
     manifest = build_manifest(config_path)
->>>>>>> e5170468 (Update build_dataset: OOD boolean + forced splits + data override)
 
     # Force output into ROOT/data (override existing files)
     data_dir = project_root / "data"

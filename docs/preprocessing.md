@@ -87,8 +87,6 @@ Users specify either percentages or game IDs in the YAML file, enabling flexible
 To balance learning, we equalize the distribution of tile classes in the train DataLoader using a random sampler. During each image request, augmentations include random rotations (90 degrees or small angles), mirroring, and color noise. These increase robustness and limit overfitting.
 
 #### OOD
-For out-of-distribution (OOD) images, we tag tiles from frames containing OOD elements (e.g., hands or foreign objects) and store them separately. These get a distinct dataset label, allowing the model to learn an 'unknown' class for OOD detection during inference.
+For out-of-distribution (OOD) images, we tag tiles from frames containing OOD elements (e.g., hands or foreign objects) and store them separately (using a special boolean flag `is_ood`). These get a distinct dataset label, allowing the model to learn an 'unknown' class for OOD detection during inference.
 
-<!-- Analize the dataset -->
-## Dataset statistics
 {% include preprocessing_stats.md %}
