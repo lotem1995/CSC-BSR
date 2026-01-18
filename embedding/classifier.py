@@ -1,43 +1,17 @@
-"""
-FEN Classification using Chess Tile Embeddings
-
-Supports multiple embedding models:
-1. QwenVisionEmbedding - Qwen3-VL vision model (2048-dim embeddings)
-2. DINOv2Embedding - Facebook's self-supervised model (384-1536 dims)
-3. Custom embedding models implementing EmbeddingModel interface
-
-Classification methods:
-1. KNN - Simple baseline (no training needed)
-2. Mahalanobis Distance - Smarter KNN
-3. Triplet Loss - Deep learning approach (training required)
-4. OOD Detection - Know when uncertain
-"""
-
 import torch
 import numpy as np
 from typing import Tuple, Optional, List
 import tempfile
 import os
 from PIL import Image
-import sys
 from collections import Counter
-
 from torch import nn
-from unicodedata import is_normalized
-from torchvision import transforms
-
-sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/preprocessing')
 from preprocessing.splitting_images import slice_image_with_coordinates
-
-sys.path.insert(0, '/home/lotems/Documents/DL_Oren/CSC-BSR/embadding')
 from embedding_base import EmbeddingModel
-
-# <--- ADDED DINO IMPORT ---
 try:
     from dinov2 import DINOv2Embedding
 except ImportError:
     from embedding.dinov2 import DINOv2Embedding
-# --------------------------
 
 class FENClassifier:
     """
@@ -144,30 +118,6 @@ class FENClassifier:
         self.binary_transform = dino_wrapper.transform
         self.has_binary_model = True
         print("✅ Binary OOD Model attached successfully.")
-
-
-    def predict_binary_ood(self, tile_images: List[Image.Image]) -> np.ndarray:
-        """
-        Uses the internal binary model to classify tiles as OOD or Not.
-        """
-        if not self.has_binary_model:
-            raise ValueError("Binary OOD model not set. Call set_binary_model() first.")
-
-        batch_tensors = []
-        for img in tile_images:
-            if img.mode != "RGB": img = img.convert("RGB")
-            # Apply 518x518 transform
-            batch_tensors.append(self.binary_transform(img).unsqueeze(0))
-
-        x = torch.cat(batch_tensors).to(self.device)
-
-        with torch.no_grad():
-            feats = self.binary_backbone(x)
-            logits = self.binary_head(feats)
-            probs = torch.softmax(logits, dim=1)
-            preds = torch.argmax(probs, dim=1) # 0=ID, 1=OOD
-
-        return preds.cpu().numpy() == 1
 
     def extract_board_embeddings(self, board_image: Image.Image) -> torch.Tensor:
         """
@@ -716,22 +666,26 @@ class FENClassifier:
 
         return predictions.cpu().numpy(), confidences.cpu().numpy(), is_ood.cpu().numpy()
 
+    # ============ METHOD 4: binary ood ============
+    def predict_binary_ood(self, tile_images: List[Image.Image]) -> np.ndarray:
+        """
+        Uses the internal binary model to classify tiles as OOD or Not.
+        """
+        if not self.has_binary_model:
+            raise ValueError("Binary OOD model not set. Call set_binary_model() first.")
 
-# Example usage:
-if __name__ == "__main__":
-    print("Per-Tile FEN Classification Module Ready!")
-    print("\nArchitecture: Path B - Per-tile KNN/Mahalanobis")
-    print("\nKey features:")
-    print("- Classifies all 64 tiles independently")
-    print("- Returns per-tile predictions (0-16) and per-tile confidences")
-    print("- OOD detection identifies unknown or uncertain tiles")
-    print("\nAvailable methods:")
-    print("1. KNN - Fast, cosine similarity-based")
-    print("2. Mahalanobis - Class-conditional distance (models class distributions)")
-    print("3. OOD Detection - Distance-based uncertainty (calibratable on validation data)")
-    print("\nUsage:")
-    print("  classifier = FENClassifier(embedding_extractor)")
-    print("  classifier.add_fen_position(fen, tile_embeddings, board_state)")
-    print("  classifier.build_index()")
-    print("  preds, confs = classifier.predict_knn(tile_embeddings, k=3)")
-    print("  # Returns: predictions[64], confidences[64]")
+        batch_tensors = []
+        for img in tile_images:
+            if img.mode != "RGB": img = img.convert("RGB")
+            # Apply 518x518 transform
+            batch_tensors.append(self.binary_transform(img).unsqueeze(0))
+
+        x = torch.cat(batch_tensors).to(self.device)
+
+        with torch.no_grad():
+            feats = self.binary_backbone(x)
+            logits = self.binary_head(feats)
+            probs = torch.softmax(logits, dim=1)
+            preds = torch.argmax(probs, dim=1) # 0=ID, 1=OOD
+
+        return preds.cpu().numpy() == 1
