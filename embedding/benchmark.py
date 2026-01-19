@@ -320,7 +320,7 @@ def main():
     BINARY_MODEL_PATH = "binary_ood_dino_small_epoch3.pt" # Points to final model
     BINARY_DINO_SIZE = "small"
     VAL_CSV = "data/splits/val.csv"
-    TEST_CSV = "data/splits/test.csv"
+    TEST_CSV = "data/splits/train.csv"
 
     classifier = load_models()
     classifier.set_binary_model(BINARY_MODEL_PATH, dino_size=BINARY_DINO_SIZE)
