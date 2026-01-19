@@ -244,11 +244,11 @@ def run_benchmark_suite(classifier: FENClassifier, test_csv_path: str):
 
     results = []
 
-    # pred_methods = ['knn']
-    # ood_methods = ['binary_ood_model']
+    pred_methods = ['knn']
+    ood_methods = ['binary_ood_model']
 
-    pred_methods = ['knn', 'softmax', 'mahalanobis']
-    ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
+    # pred_methods = ['knn', 'softmax', 'mahalanobis']
+    # ood_methods = ['binary_ood_model', 'softmax', 'knn', 'mahalanobis', 'ensemble']
 
     total_runs = len(pred_methods) * len(ood_methods)
     pbar = tqdm(total=total_runs, desc="Benchmarking Combinations")
@@ -320,7 +320,7 @@ def main():
     BINARY_MODEL_PATH = "binary_ood_dino_small_epoch3.pt" # Points to final model
     BINARY_DINO_SIZE = "small"
     VAL_CSV = "data/splits/val.csv"
-    TEST_CSV = "data/splits/train.csv"
+    TEST_CSV = "data/splits/train.csv" # TODO :  change it back to test
 
     classifier = load_models()
     classifier.set_binary_model(BINARY_MODEL_PATH, dino_size=BINARY_DINO_SIZE)
