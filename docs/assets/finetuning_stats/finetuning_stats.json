@@ -1,0 +1,47 @@
+{
+  "models": {
+    "dino-small_backbone": {
+      "display_name": "DinoV2 (Backbone)",
+      "embedding_model": "dino-small",
+      "strategy": "backbone",
+      "epochs": 1,
+      "batch_size": 2,
+      "best_val_loss": 0.17197997391713216,
+      "best_balanced_accuracy": 0.9577922077922078,
+      "best_f1_score": 0.9563041125541124
+    },
+    "dino-small_head-only": {
+      "display_name": "DinoV2 (Head Only)",
+      "embedding_model": "dino-small",
+      "strategy": "head-only",
+      "epochs": 1,
+      "batch_size": 2,
+      "best_val_loss": 0.769220311386857,
+      "best_balanced_accuracy": 0.752435064935065,
+      "best_f1_score": 0.7408685064935056
+    },
+    "qwen_head-only": {
+      "display_name": "Qwen2-VL (Head Only)",
+      "embedding_model": "qwen",
+      "strategy": "head-only",
+      "epochs": 1,
+      "batch_size": 2,
+      "best_val_loss": 0.9517075160985013,
+      "best_balanced_accuracy": 0.6889204545454546,
+      "best_f1_score": 0.6946022727272738
+    },
+    "qwen_lora": {
+      "display_name": "Qwen2-VL (LoRA)",
+      "embedding_model": "qwen",
+      "strategy": "lora",
+      "epochs": 1,
+      "batch_size": 2,
+      "best_val_loss": 0.7650950317705344,
+      "best_balanced_accuracy": 0.7782061688311688,
+      "best_f1_score": 0.7815882034632052
+    }
+  },
+  "best_model_by_accuracy": "dino-small_backbone",
+  "best_model_by_f1": "dino-small_backbone",
+  "best_model_by_val_loss": "dino-small_backbone"
+}

@@ -15,6 +15,7 @@ Updated to work with pre-built dataset from build_dataset.py
 import sys
 from pathlib import Path
 import argparse
+import json
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -543,6 +544,18 @@ def train_fine_tuning(
     else:
         fine_tuner = FineTuner(embedding_model=embedding_model)
     
+    # Initialize metrics dictionary to track training progress
+    metrics = {
+        "epochs": epochs,
+        "batch_size": batch_size,
+        "embedding_model": embedding_model_name,
+        "strategy": strategy,
+        "train_loss": [],
+        "val_loss": [],
+        "val_balanced_accuracy": [],
+        "val_f1_score": []
+    }
+    
     # Training loop
     for epoch in range(epochs):
         logger.info(f"Epoch {epoch+1}/{epochs}")
@@ -563,6 +576,7 @@ def train_fine_tuning(
                 logger.info(f"  Batch {batch_idx+1}: Loss = {loss:.4f}")
         
         avg_loss = total_loss / max(num_batches, 1)
+        metrics["train_loss"].append(avg_loss)
         logger.info(f"Epoch {epoch+1} Training - Avg Loss: {avg_loss:.4f}")
         
         # Validation phase
@@ -584,6 +598,12 @@ def train_fine_tuning(
             avg_val_loss = val_loss / max(val_batches, 1)
             avg_val_balanced_acc = val_balanced_acc / max(val_batches, 1)
             avg_val_f1 = val_f1 / max(val_batches, 1)
+            
+            # Store validation metrics
+            metrics["val_loss"].append(avg_val_loss)
+            metrics["val_balanced_accuracy"].append(avg_val_balanced_acc)
+            metrics["val_f1_score"].append(avg_val_f1)
+            
             logger.info(f"Epoch {epoch+1} Validation:"
                         f"  Loss: {avg_val_loss:.4f}"
                         f"  Balanced Accuracy: {avg_val_balanced_acc:.4f}"
@@ -595,6 +615,13 @@ def train_fine_tuning(
     output_path = str(Path(__file__).resolve().parent / f"chess_encoder_finetuned_{embedding_model_name}_{strategy}.pt")
     fine_tuner.save(output_path)
     logger.info(f"✓ Fine-tuned model saved to: {output_path}")
+    
+    # Save training metrics
+    file_name = f"metrics_{embedding_model_name}_{strategy}"
+    metrics_path = str(Path(__file__).resolve().parent / (file_name+"_{time}.json"))
+    with open(metrics_path, 'w') as f:
+        json.dump(metrics, f, indent=2)
+    logger.info(f"✓ Training metrics saved to: {metrics_path}")
     
     return fine_tuner
 

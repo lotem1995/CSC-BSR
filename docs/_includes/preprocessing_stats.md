@@ -4,8 +4,8 @@
 **Config:** (not provided to script)
 
 {: .result }
-**Size:** 75,279 tiles from 1,170 board frames across 11 games. Non-empty (in-distribution) tiles: **33.1%**; OOD tiles: **0.00%**.
-Train↔Test class distribution shift (JSD, excluding empty): **0.500 bits**.
+**Size:** 38,016 tiles from 594 board frames across 10 games. Non-empty (in-distribution) tiles: **32.6%**; OOD tiles: **1.48%**.
+Train↔Test class distribution shift (JSD, excluding empty): **0.025 bits**.
 
 {: .result }
 **Split hygiene:** no board_id / game_id overlap between train/val/test (✅).
@@ -14,17 +14,16 @@ Train↔Test class distribution shift (JSD, excluding empty): **0.500 bits**.
 
 | split | tiles | boards | games | non-empty tiles | OOD tiles | boards complete (64 tiles) | missing images | embeddings present |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| train | 75,279 | 1,170 | 11 | 24,886 (33.1%) | 0 (0.00%) | 98.4% | 0 | 0 (0.0%) |
-| val | 0 | 0 | 0 | 0 (0.0%) | 0 (0.00%) | 0.0% | 0 | 0 (0.0%) |
-| test | 0 | 0 | 0 | 0 (0.0%) | 0 (0.00%) | 0.0% | 0 | 0 (0.0%) |
+| train | 21,312 | 333 | 8 | 8,119 (38.1%) | 182 (0.85%) | 100.0% | 0 | 0 (0.0%) |
+| val | 4,928 | 77 | 1 | 1,734 (35.2%) | 45 (0.91%) | 100.0% | 0 | 0 (0.0%) |
+| test | 11,776 | 184 | 1 | 2,528 (21.5%) | 335 (2.84%) | 100.0% | 0 | 0 (0.0%) |
 
 ### Class balance (high level)
 
 {: .decision }
-The dataset is **empty-dominant**: class `empty` is 50,393 tiles (**66.9%**). If you train a classifier directly on raw tiles, use class balancing (sampler / loss weights).
+The dataset is **empty-dominant**: class `empty` is 25,073 tiles (**66.0%**). If you train a classifier directly on raw tiles, use class balancing (sampler / loss weights).
 
-**Top classes (excluding empty):** white_pawn (6,582), black_pawn (6,270), black_rook (1,691), white_rook (1,673), black_bishop (1,358), white_knight (1,325), white_bishop (1,238), black_king (1,180)
-**Rare (<0.75%)**: OOD (0)
+**Top classes (excluding empty):** white_pawn (3,297), black_pawn (3,123), white_rook (841), black_rook (841), black_bishop (666), white_knight (658), white_bishop (611), white_king (585)
 
 ### Training dataloader (WeightedRandomSampler)
 
@@ -32,20 +31,19 @@ The dataset is **empty-dominant**: class `empty` is 50,393 tiles (**66.9%**). If
 
 | class | weight | effective % |
 |---|---:|---:|
-| empty | 0.0000 | 7.69% |
-| white_pawn | 0.0002 | 7.69% |
-| white_knight | 0.0008 | 7.69% |
-| white_bishop | 0.0008 | 7.69% |
-| white_rook | 0.0006 | 7.69% |
-| white_queen | 0.0014 | 7.69% |
-| white_king | 0.0008 | 7.69% |
-| black_pawn | 0.0002 | 7.69% |
-| black_knight | 0.0010 | 7.69% |
-| black_bishop | 0.0007 | 7.69% |
-| black_rook | 0.0006 | 7.69% |
-| black_queen | 0.0014 | 7.69% |
-| black_king | 0.0008 | 7.69% |
-| OOD | 0.0000 | 0.00% |
+| empty | 0.0001 | 7.69% |
+| white_pawn | 0.0005 | 7.69% |
+| white_knight | 0.0025 | 7.69% |
+| white_bishop | 0.0020 | 7.69% |
+| white_rook | 0.0020 | 7.69% |
+| white_queen | 0.0038 | 7.69% |
+| white_king | 0.0030 | 7.69% |
+| black_pawn | 0.0005 | 7.69% |
+| black_knight | 0.0027 | 7.69% |
+| black_bishop | 0.0022 | 7.69% |
+| black_rook | 0.0020 | 7.69% |
+| black_queen | 0.0038 | 7.69% |
+| black_king | 0.0031 | 7.69% |
 
 {: .info }
 The training dataloader uses `WeightedRandomSampler` to balance class representation during training, giving rarer classes more frequent sampling.

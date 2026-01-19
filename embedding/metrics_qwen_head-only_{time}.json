@@ -1,0 +1,18 @@
+{
+  "epochs": 1,
+  "batch_size": 2,
+  "embedding_model": "qwen",
+  "strategy": "head-only",
+  "train_loss": [
+    1.5119913920395964
+  ],
+  "val_loss": [
+    0.9517075160985013
+  ],
+  "val_balanced_accuracy": [
+    0.6889204545454546
+  ],
+  "val_f1_score": [
+    0.6946022727272738
+  ]
+}

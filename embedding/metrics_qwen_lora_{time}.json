@@ -1,0 +1,18 @@
+{
+  "epochs": 1,
+  "batch_size": 2,
+  "embedding_model": "qwen",
+  "strategy": "lora",
+  "train_loss": [
+    1.5242538666823273
+  ],
+  "val_loss": [
+    0.7650950317705344
+  ],
+  "val_balanced_accuracy": [
+    0.7782061688311688
+  ],
+  "val_f1_score": [
+    0.7815882034632052
+  ]
+}

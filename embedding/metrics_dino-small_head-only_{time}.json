@@ -1,0 +1,18 @@
+{
+  "epochs": 1,
+  "batch_size": 2,
+  "embedding_model": "dino-small",
+  "strategy": "head-only",
+  "train_loss": [
+    1.1016168582537904
+  ],
+  "val_loss": [
+    0.769220311386857
+  ],
+  "val_balanced_accuracy": [
+    0.752435064935065
+  ],
+  "val_f1_score": [
+    0.7408685064935056
+  ]
+}

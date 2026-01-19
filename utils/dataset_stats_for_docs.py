@@ -70,7 +70,6 @@ CLASS_MAP: Dict[int, str] = {
     14: "black_rook",
     15: "black_queen",
     16: "black_king",
-    17: "OOD",
 }
 
 # BoardState colors (dark)
@@ -221,6 +220,7 @@ class DataloaderStats:
 @dataclass
 class GlobalStats:
     total_tiles: int
+    total_ood_tiles: int
     total_boards: int
     total_games: int
     overall_class_counts: Dict[int, int]
@@ -247,6 +247,11 @@ def load_split_csv(csv_path: Path, root: Path) -> pd.DataFrame:
     df["label"] = df["label"].astype(int)
     df["board_id"] = df["board_id"].astype(str)
 
+    # Normalize OOD flag (now separate from classes)
+    if "is_ood" not in df.columns:
+        df["is_ood"] = 0
+    df["is_ood"] = df["is_ood"].fillna(0).astype(int)
+
     # Normalize embedding presence: empty string should count as missing
     if "embedding" not in df.columns:
         df["embedding"] = ""
@@ -265,8 +270,9 @@ def compute_split_stats(name: str, df: pd.DataFrame, root: Path, expected_tiles_
     boards = int(df["board_id"].nunique())
     games = int(df["game_id"].nunique())
 
-    ood_tiles = int((df["label"] == 17).sum())
-    nonempty_tiles = int(((df["label"] != 0) & (df["label"] != 17)).sum())
+    ood_mask = df["is_ood"].astype(bool) if "is_ood" in df.columns else pd.Series(False, index=df.index)
+    ood_tiles = int(ood_mask.sum())
+    nonempty_tiles = int(((df["label"] != 0) & (~ood_mask)).sum())
 
     # tiles per board
     tpb = df.groupby("board_id").size().astype(int)
@@ -306,6 +312,8 @@ def compute_split_stats(name: str, df: pd.DataFrame, root: Path, expected_tiles_
 
 def class_counts(df: pd.DataFrame) -> Dict[int, int]:
     counts = {cid: 0 for cid in CLASS_MAP.keys()}
+    if "is_ood" in df.columns:
+        df = df[df["is_ood"] == 0]
     vc = df["label"].value_counts().to_dict()
     for cid in counts.keys():
         counts[cid] = int(vc.get(cid, 0))
@@ -328,9 +336,8 @@ def compute_global_stats(
     total_tiles = int(len(all_df))
     total_boards = int(all_df["board_id"].nunique())
     total_games = int(all_df["game_id"].nunique())
-
+    total_ood_tiles = int(all_df["is_ood"].sum()) if "is_ood" in all_df.columns else 0
     overall_counts = class_counts(all_df)
-
     # Split hygiene
     train = dfs.get("train")
     val = dfs.get("val")
@@ -354,8 +361,10 @@ def compute_global_stats(
     jsd = None
     if train is not None and test is not None:
         # Compare class distribution excluding empty (0) to get a more meaningful distance
-        train_counts = np.array([class_counts(train)[cid] for cid in CLASS_MAP.keys() if cid != 0], dtype=float)
-        test_counts = np.array([class_counts(test)[cid] for cid in CLASS_MAP.keys() if cid != 0], dtype=float)
+        train_id = train[train["is_ood"] == 0] if "is_ood" in train.columns else train
+        test_id = test[test["is_ood"] == 0] if "is_ood" in test.columns else test
+        train_counts = np.array([class_counts(train_id)[cid] for cid in CLASS_MAP.keys() if cid != 0], dtype=float)
+        test_counts = np.array([class_counts(test_id)[cid] for cid in CLASS_MAP.keys() if cid != 0], dtype=float)
         jsd = jensen_shannon_divergence(train_counts, test_counts)
 
     # Dataloader analysis (if train split exists)
@@ -365,6 +374,7 @@ def compute_global_stats(
 
     return GlobalStats(
         total_tiles=total_tiles,
+        total_ood_tiles=total_ood_tiles,
         total_boards=total_boards,
         total_games=total_games,
         overall_class_counts=overall_counts,
@@ -384,6 +394,11 @@ def compute_dataloader_stats(train_df: pd.DataFrame) -> Dict[str, DataloaderStat
     with WeightedRandomSampler.
     """
     results = {}
+
+    if "is_ood" in train_df.columns:
+        train_df = train_df[train_df["is_ood"] == 0]
+    if len(train_df) == 0:
+        return results
     
     # Compute class weights (inverse of class counts)
     class_counts_dict = class_counts(train_df)
@@ -533,7 +548,7 @@ def plot_class_heatmap(dfs: Dict[str, pd.DataFrame], out_dir: Path) -> Optional[
     for i in range(len(class_ids)):
         for j in range(len(splits)):
             v = mat[j, i]
-            if v >= 1.0 or class_ids[i] in (0, 17):
+            if v >= 1.0 or class_ids[i] == 0:
                 ax.text(j, i, f"{v:.1f}", ha="center", va="center", fontsize=8)
 
     boardstate_axes(ax)
@@ -645,7 +660,7 @@ def write_markdown(
 
     # Derive a few headline numbers
     empty = stats.overall_class_counts.get(0, 0)
-    ood = stats.overall_class_counts.get(17, 0)
+    ood = stats.total_ood_tiles
     nonempty = stats.total_tiles - empty - ood
 
     jsd_line = ""
@@ -857,6 +872,7 @@ def main() -> int:
         if isinstance(obj, GlobalStats):
             return {
                 "total_tiles": obj.total_tiles,
+                "total_ood_tiles": obj.total_ood_tiles,
                 "total_boards": obj.total_boards,
                 "total_games": obj.total_games,
                 "overall_class_counts": obj.overall_class_counts,
