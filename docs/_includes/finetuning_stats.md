@@ -20,20 +20,19 @@
 
 ### Training Curves
 
-![Training Curves](../assets/finetuning_stats/training_curves.png)
+![Training Curves](assets/finetuning_stats/training_curves.png)
 
 ### Metrics Heatmap
 
-![Metrics Heatmap](../assets/finetuning_stats/metrics_heatmap.png)
+![Metrics Heatmap](assets/finetuning_stats/metrics_heatmap.png)
 
 ### Strategy Comparison
 
-![Strategy Comparison](../assets/finetuning_stats/strategy_comparison.png)
+![Strategy Comparison](assets/finetuning_stats/strategy_comparison.png)
 
 ### Batch-Level Training Loss
 
-![Training Loss Curves](../assets/finetuning_stats/training_loss_curves.png)
-
+![Training Loss Curves](assets/finetuning_stats/training_loss_curves.png)
 {: .note }
 > Detailed batch-level loss with 50-sample moving average smoothing. Raw data points shown semi-transparently for context.
 
