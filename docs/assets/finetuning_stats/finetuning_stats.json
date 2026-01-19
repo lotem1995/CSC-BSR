@@ -21,7 +21,7 @@
       "best_f1_score": 0.7408685064935056
     },
     "qwen_head-only": {
-      "display_name": "Qwen2-VL (Head Only)",
+      "display_name": "Qwen3-VL (Head Only)",
       "embedding_model": "qwen",
       "strategy": "head-only",
       "epochs": 1,
@@ -31,7 +31,7 @@
       "best_f1_score": 0.6946022727272738
     },
     "qwen_lora": {
-      "display_name": "Qwen2-VL (LoRA)",
+      "display_name": "Qwen3-VL (LoRA)",
       "embedding_model": "qwen",
       "strategy": "lora",
       "epochs": 1,

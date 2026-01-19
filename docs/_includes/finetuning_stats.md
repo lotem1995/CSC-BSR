@@ -15,8 +15,8 @@
 |-------|----------|--------------|----------|----------|
 | DinoV2 (Backbone) | backbone | 95.78% | 95.63% | 0.1720 |
 | DinoV2 (Head Only) | head-only | 75.24% | 74.09% | 0.7692 |
-| Qwen2-VL (Head Only) | head-only | 68.89% | 69.46% | 0.9517 |
-| Qwen2-VL (LoRA) | lora | 77.82% | 78.16% | 0.7651 |
+| Qwen3-VL (Head Only) | head-only | 68.89% | 69.46% | 0.9517 |
+| Qwen3-VL (LoRA) | lora | 77.82% | 78.16% | 0.7651 |
 
 ### Training Curves
 
@@ -29,6 +29,13 @@
 ### Strategy Comparison
 
 ![Strategy Comparison](../assets/finetuning_stats/strategy_comparison.png)
+
+### Batch-Level Training Loss
+
+![Training Loss Curves](../assets/finetuning_stats/training_loss_curves.png)
+
+{: .note }
+> Detailed batch-level loss with 50-sample moving average smoothing. Raw data points shown semi-transparently for context.
 
 {: .note }
 > **Technical Details**

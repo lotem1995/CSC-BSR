@@ -8,12 +8,21 @@ Outputs:
   2) A Markdown snippet (Just-the-Docs callouts + tables) for docs
   3) finetuning_stats.json (machine-readable summary)
 
+Features:
+  - Epoch-level metrics: training/validation loss, accuracy, F1 score
+  - Batch-level loss curves with moving average smoothing (from extracted_loss_data.json)
+  - Automatic BoardState dark theme styling
+  - Auto-discovery of loss data and style files
+
 Typical usage:
+  python utils/finetuning_stats_for_docs.py
+  
+Or with explicit paths:
   python utils/finetuning_stats_for_docs.py \
     --metrics-dir embedding \
+    --loss-data utils/extracted_loss_data.json \
     --out-dir docs/assets/finetuning_stats \
-    --md-out docs/_includes/finetuning_stats.md \
-    --style-path utils/styles/boardstate-dark.mplstyle
+    --md-out docs/_includes/finetuning_stats.md
 
 Then in docs/*.md add:
   {% include finetuning_stats.md %}
@@ -23,17 +32,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # Optional imports (plots are optional but recommended)
 try:
     import matplotlib.pyplot as plt
     import matplotlib.patches as mpatches
+    import numpy as np
 except Exception:
     plt = None
+    np = None
 
 # BoardState colors (dark theme)
 COLORS = {
@@ -55,8 +67,8 @@ COLORS = {
 MODEL_DISPLAY = {
     "dino-small_backbone": {"name": "DinoV2 (Backbone)", "color": COLORS["accent"]},
     "dino-small_head-only": {"name": "DinoV2 (Head Only)", "color": COLORS["info"]},
-    "qwen_head-only": {"name": "Qwen2-VL (Head Only)", "color": COLORS["warn"]},
-    "qwen_lora": {"name": "Qwen2-VL (LoRA)", "color": COLORS["success"]},
+    "qwen_head-only": {"name": "Qwen3-VL (Head Only)", "color": COLORS["warn"]},
+    "qwen_lora": {"name": "Qwen3-VL (LoRA)", "color": COLORS["success"]},
 }
 
 
@@ -78,6 +90,8 @@ class ModelMetrics:
     val_loss: List[float]
     val_balanced_accuracy: List[float]
     val_f1_score: List[float]
+    train_loss_batches: Optional[List[int]] = None
+    train_loss_values: Optional[List[float]] = None
 
     @property
     def best_val_loss(self) -> float:
@@ -116,21 +130,27 @@ class GlobalStats:
 
 
 def setup_boardstate_matplotlib(style_path: Optional[Path] = None) -> None:
-    """Apply BoardState styling.
-
-    If style_path exists, uses it. Otherwise sets rcParams directly.
+    """Apply BoardState styling using matplotlib style file.
+    
+    If style_path is not provided, automatically looks for the style file
+    in utils/styles/boardstate-dark.mplstyle
     """
     if plt is None:
         return
 
+    # If no style path provided, use default
+    if style_path is None:
+        style_path = Path(__file__).parent / "styles" / "boardstate-dark.mplstyle"
+
+    # Try to load the style file
     if style_path and style_path.exists():
         try:
             plt.style.use(str(style_path))
             return
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warning: Could not load style file {style_path}: {e}", file=sys.stderr)
 
-    # Fallback to manual styling
+    # Fallback to manual styling if file not found
     plt.rcParams.update(
         {
             "figure.facecolor": COLORS["bg"],
@@ -180,6 +200,78 @@ def _save_fig(fig, out_path: Path):
 # -----------------------------
 
 
+def extract_training_loss_from_json(loss_data_path: Path) -> Dict[str, Tuple[List[int], List[float]]]:
+    """Load pre-extracted training loss data from JSON file.
+    
+    Expected format:
+    {
+        "model_key": {
+            "batches": [batch_nums],
+            "losses": [loss_values],
+            "num_points": int
+        }
+    }
+    """
+    if not loss_data_path.exists():
+        return {}
+    
+    try:
+        with loss_data_path.open('r') as f:
+            data = json.load(f)
+        
+        result = {}
+        for model_key, model_data in data.items():
+            batches = model_data.get("batches", [])
+            losses = model_data.get("losses", [])
+            if batches and losses:
+                result[model_key] = (batches, losses)
+        
+        return result
+    except Exception as e:
+        print(f"Warning: Failed to load loss data from {loss_data_path}: {e}", file=sys.stderr)
+        return {}
+
+
+def extract_training_loss_from_log(log_path: Path) -> Tuple[List[int], List[float]]:
+    """Extract batch numbers and loss values from log file (fallback method)."""
+    if not log_path.exists():
+        return [], []
+
+    batches, losses = [], []
+    pattern = r'Batch (\d+): Loss = ([\d.]+)'
+
+    try:
+        with log_path.open('r') as f:
+            for line in f:
+                match = re.search(pattern, line)
+                if match:
+                    batches.append(int(match.group(1)))
+                    losses.append(float(match.group(2)))
+    except Exception as e:
+        print(f"Warning: Failed to parse {log_path}: {e}", file=sys.stderr)
+
+    return batches, losses
+
+
+def find_log_file_for_model(logs_dir: Path, model_key: str) -> Optional[Path]:
+    """Find training log file for a model."""
+    parts = model_key.rsplit('_', 1)
+    if len(parts) != 2:
+        return None
+
+    model_name, strategy = parts
+    patterns = [
+        f"fine_tune_{strategy}_{model_name}_*.log",
+        f"fine_tune_{model_name}_{strategy}_*.log",
+    ]
+
+    for pattern in patterns:
+        matches = list(logs_dir.glob(pattern))
+        if matches:
+            return max(matches, key=lambda p: p.stat().st_mtime)
+    return None
+
+
 def load_metrics_json(json_path: Path) -> Optional[ModelMetrics]:
     """Load metrics from a JSON file."""
     if not json_path.exists():
@@ -210,14 +302,47 @@ def load_metrics_json(json_path: Path) -> Optional[ModelMetrics]:
         return None
 
 
-def load_all_metrics(metrics_dir: Path) -> Dict[str, ModelMetrics]:
-    """Load all metrics JSON files from the directory."""
+def load_all_metrics(metrics_dir: Path, logs_dir: Optional[Path] = None, loss_data_path: Optional[Path] = None) -> Dict[str, ModelMetrics]:
+    """Load all metrics JSON files from the directory and optionally attach pre-extracted loss data.
+    
+    Args:
+        metrics_dir: Directory with metrics_*.json files
+        logs_dir: Deprecated. Directory with .log files (fallback if no loss_data_path)
+        loss_data_path: Path to extracted_loss_data.json with pre-extracted batch losses
+    """
     models = {}
+
+    # Try to load pre-extracted loss data from JSON first (preferred method)
+    loss_data_from_json = {}
+    if loss_data_path is None:
+        # Auto-discover loss data file
+        loss_data_path = Path(__file__).parent / "extracted_loss_data.json"
+    
+    if loss_data_path and loss_data_path.exists():
+        loss_data_from_json = extract_training_loss_from_json(loss_data_path)
+        if loss_data_from_json:
+            print(f"✓ Loaded loss data from {loss_data_path.name}")
 
     # Look for metrics_*.json files
     for json_path in sorted(metrics_dir.glob("metrics_*.json")):
         metrics = load_metrics_json(json_path)
         if metrics:
+            # First try to get loss data from pre-extracted JSON
+            if metrics.model_key in loss_data_from_json:
+                batches, losses = loss_data_from_json[metrics.model_key]
+                metrics.train_loss_batches = batches
+                metrics.train_loss_values = losses
+                print(f"  → {metrics.model_key}: {len(batches)} loss points from extracted data")
+            # Fallback to log file parsing if available
+            elif logs_dir:
+                log_file = find_log_file_for_model(logs_dir, metrics.model_key)
+                if log_file:
+                    batches, losses = extract_training_loss_from_log(log_file)
+                    if batches and losses:
+                        metrics.train_loss_batches = batches
+                        metrics.train_loss_values = losses
+                        print(f"  → {metrics.model_key}: {len(batches)} loss points from log file")
+            
             models[metrics.model_key] = metrics
 
     return models
@@ -331,56 +456,123 @@ def plot_model_comparison(stats: GlobalStats, out_dir: Path) -> Optional[Path]:
 def plot_training_curves(stats: GlobalStats, out_dir: Path) -> Optional[Path]:
     """
     Plot training and validation loss curves for all models.
+    Bar chart for single/few epochs, line chart for multiple epochs.
     """
     if plt is None or not stats.models:
         return None
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    # Determine if we have enough epochs for line plot
+    max_epochs = max((len(m.train_loss) for m in stats.models.values()), default=0)
+    use_bar_chart = max_epochs < 2
 
-    for model_key, metrics in stats.models.items():
-        epochs = list(range(1, len(metrics.train_loss) + 1))
-        color = metrics.color
+    if use_bar_chart:
+        # Bar chart format for single epoch - better visualization
+        models = stats.models
+        model_keys = sorted(models.keys())
+        display_names = [models[k].display_name for k in model_keys]
 
-        # Training loss
-        ax1.plot(
-            epochs,
-            metrics.train_loss,
-            marker="o",
-            label=metrics.display_name,
-            color=color,
-            linewidth=2,
+        train_losses = [models[k].train_loss[0] if models[k].train_loss else 0 for k in model_keys]
+        val_losses = [models[k].val_loss[0] if models[k].val_loss else 0 for k in model_keys]
+
+        fig, ax = plt.subplots(figsize=(13, 6))
+
+        x = np.arange(len(display_names))
+        width = 0.35
+
+        # Create bars
+        bars1 = ax.bar(
+            x - width / 2,
+            train_losses,
+            width,
+            label="Training Loss",
+            color=COLORS["accent"],
+            alpha=0.9,
+        )
+        bars2 = ax.bar(
+            x + width / 2,
+            val_losses,
+            width,
+            label="Validation Loss",
+            color=COLORS["warn"],
+            alpha=0.9,
         )
 
-        # Validation loss
-        ax2.plot(
-            epochs,
-            metrics.val_loss,
-            marker="s",
-            label=metrics.display_name,
-            color=color,
-            linewidth=2,
+        # Add value labels on bars
+        def add_labels(bars):
+            for bar in bars:
+                height = bar.get_height()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2.0,
+                    height + 0.03,
+                    f"{height:.3f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=9,
+                    color=COLORS["text"],
+                    fontweight="bold",
+                )
+
+        add_labels(bars1)
+        add_labels(bars2)
+
+        ax.set_xlabel("Model", fontsize=12, fontweight="bold")
+        ax.set_ylabel("Loss", fontsize=12, fontweight="bold")
+        ax.set_title("Fine-Tuning Loss Comparison (Training vs Validation)", fontsize=14, fontweight="bold", pad=20)
+        ax.set_xticks(x)
+        ax.set_xticklabels(display_names, rotation=15, ha="right")
+        ax.legend(loc="upper right", fontsize=11)
+        boardstate_axes(ax)
+        ax.yaxis.grid(True, alpha=0.3, linestyle="--")
+        ax.set_axisbelow(True)
+
+    else:
+        # Line chart for multiple epochs
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+        for model_key, metrics in stats.models.items():
+            epochs = list(range(1, len(metrics.train_loss) + 1))
+            color = metrics.color
+
+            # Training loss
+            ax1.plot(
+                epochs,
+                metrics.train_loss,
+                marker="o",
+                label=metrics.display_name,
+                color=color,
+                linewidth=2,
+            )
+
+            # Validation loss
+            ax2.plot(
+                epochs,
+                metrics.val_loss,
+                marker="s",
+                label=metrics.display_name,
+                color=color,
+                linewidth=2,
+            )
+
+        # Styling for training loss
+        ax1.set_xlabel("Epoch", fontsize=11, fontweight="bold")
+        ax1.set_ylabel("Loss", fontsize=11, fontweight="bold")
+        ax1.set_title("Training Loss", fontsize=12, fontweight="bold")
+        ax1.legend(loc="best", fontsize=9)
+        boardstate_axes(ax1)
+
+        # Styling for validation loss
+        ax2.set_xlabel("Epoch", fontsize=11, fontweight="bold")
+        ax2.set_ylabel("Loss", fontsize=11, fontweight="bold")
+        ax2.set_title("Validation Loss", fontsize=12, fontweight="bold")
+        ax2.legend(loc="best", fontsize=9)
+        boardstate_axes(ax2)
+
+        fig.suptitle(
+            "Fine-Tuning Loss Curves",
+            fontsize=14,
+            fontweight="bold",
+            y=1.02,
         )
-
-    # Styling for training loss
-    ax1.set_xlabel("Epoch", fontsize=11, fontweight="bold")
-    ax1.set_ylabel("Loss", fontsize=11, fontweight="bold")
-    ax1.set_title("Training Loss", fontsize=12, fontweight="bold")
-    ax1.legend(loc="best", fontsize=9)
-    boardstate_axes(ax1)
-
-    # Styling for validation loss
-    ax2.set_xlabel("Epoch", fontsize=11, fontweight="bold")
-    ax2.set_ylabel("Loss", fontsize=11, fontweight="bold")
-    ax2.set_title("Validation Loss", fontsize=12, fontweight="bold")
-    ax2.legend(loc="best", fontsize=9)
-    boardstate_axes(ax2)
-
-    fig.suptitle(
-        "Fine-Tuning Loss Curves",
-        fontsize=14,
-        fontweight="bold",
-        y=1.02,
-    )
 
     out_path = out_dir / "training_curves.png"
     _save_fig(fig, out_path)
@@ -546,9 +738,53 @@ def plot_strategy_comparison(stats: GlobalStats, out_dir: Path) -> Optional[Path
     return out_path
 
 
-# -----------------------------
-# Markdown generation
-# -----------------------------
+def plot_training_loss_curves(stats: GlobalStats, out_dir: Path) -> Optional[Path]:
+    """Plot detailed batch-level training loss curves with smoothing."""
+    if plt is None or np is None or not stats.models:
+        return None
+
+    has_loss_data = any(m.train_loss_batches and m.train_loss_values for m in stats.models.values())
+    if not has_loss_data:
+        return None
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+
+    for model_key, metrics in stats.models.items():
+        if not metrics.train_loss_batches or not metrics.train_loss_values:
+            continue
+
+        batches = np.array(metrics.train_loss_batches)
+        losses = np.array(metrics.train_loss_values)
+
+        # Moving average smoothing
+        window_size = 50
+        if len(losses) >= window_size:
+            smoothed = np.convolve(losses, np.ones(window_size)/window_size, mode='valid')
+            smoothed_batches = batches[window_size-1:]
+        else:
+            smoothed, smoothed_batches = losses, batches
+
+        # Plot smoothed curve
+        ax.plot(smoothed_batches, smoothed, label=metrics.display_name,
+                color=metrics.color, linewidth=2.5, alpha=0.9)
+
+        # Raw data as semi-transparent scatter
+        ax.scatter(batches[::20], losses[::20], color=metrics.color, alpha=0.15, s=10)
+
+    ax.set_xlabel("Training Batch", fontsize=12, fontweight="bold")
+    ax.set_ylabel("Loss", fontsize=12, fontweight="bold")
+    ax.set_title("Training Loss Curves (Batch-Level, Smoothed)", fontsize=14, fontweight="bold", pad=20)
+    ax.legend(loc="upper right", fontsize=10)
+    ax.set_ylim(bottom=0)
+    boardstate_axes(ax)
+    ax.grid(True, alpha=0.3)
+
+    out_path = out_dir / "training_loss_curves.png"
+    _save_fig(fig, out_path)
+    return out_path
+
+
+
 
 
 def relpath_for_docs(asset_path: Path, md_out: Path) -> str:
@@ -626,6 +862,15 @@ def write_markdown(
             f.write("### Strategy Comparison\n\n")
             f.write(f"![Strategy Comparison]({img_url})\n\n")
 
+        # Training loss curves (batch-level)
+        if asset_paths.get("training_loss_curves"):
+            img_url = relpath_for_docs(asset_paths["training_loss_curves"], md_out)
+            f.write("### Batch-Level Training Loss\n\n")
+            f.write(f"![Training Loss Curves]({img_url})\n\n")
+            f.write("{: .note }\n")
+            f.write("> Detailed batch-level loss with 50-sample moving average smoothing. ")
+            f.write("Raw data points shown semi-transparently for context.\n\n")
+
         # Technical details callout
         f.write("{: .note }\n")
         f.write("> **Technical Details**\n")
@@ -660,6 +905,18 @@ def main() -> int:
         help="Directory containing metrics_*.json files (default: embedding)",
     )
     parser.add_argument(
+        "--loss-data",
+        type=Path,
+        default=None,
+        help="Path to extracted_loss_data.json with pre-extracted batch losses (auto-discovers by default)",
+    )
+    parser.add_argument(
+        "--logs-dir",
+        type=Path,
+        default=None,
+        help="[DEPRECATED] Directory with .log files (fallback if loss-data not available)",
+    )
+    parser.add_argument(
         "--out-dir",
         type=Path,
         default=Path("docs/assets/finetuning_stats"),
@@ -674,7 +931,7 @@ def main() -> int:
     parser.add_argument(
         "--style-path",
         type=Path,
-        default=Path("utils/styles/boardstate-dark.mplstyle"),
+        default=None,
         help="Matplotlib style file (default: utils/styles/boardstate-dark.mplstyle)",
     )
     parser.add_argument(
@@ -699,7 +956,7 @@ def main() -> int:
 
     # Load metrics
     print(f"Loading metrics from {args.metrics_dir}...")
-    models = load_all_metrics(args.metrics_dir)
+    models = load_all_metrics(args.metrics_dir, args.logs_dir, args.loss_data)
 
     if not models:
         print("Error: No valid metrics files found", file=sys.stderr)
@@ -719,6 +976,7 @@ def main() -> int:
     asset_paths["training_curves"] = plot_training_curves(stats, args.out_dir)
     asset_paths["metrics_heatmap"] = plot_metrics_heatmap(stats, args.out_dir)
     asset_paths["strategy_comparison"] = plot_strategy_comparison(stats, args.out_dir)
+    asset_paths["training_loss_curves"] = plot_training_loss_curves(stats, args.out_dir)
 
     # Write markdown
     if args.md_out:
