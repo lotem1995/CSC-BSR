@@ -25,19 +25,19 @@ On this GitHub Pages site, we will explore the final architecture and our reason
 
 <div class="bs-card" markdown="block">
 ### Pre-Processing
-Converting the frame into tile images  
+Converting the frame into tile images and preparing the dataset.
 [Read more →](preprocessing.md){: .btn .btn-outline }
 </div>
 
 <div class="bs-card" markdown="block">
 ### Tile Embedding
-Fine-tuned DINOv2 backbone based tile embedding. 
+Fine-tuned DINOv2 backbone based tile embedding.
 [Read more →](tile_embedding.md){: .btn .btn-outline }
 </div>
 
 <div class="bs-card" markdown="block">
 ### Tile + Board Classification and board reconstruction
-KNN tile classifier + DINOv2 binary OOD detection + board reconstruction. 
+KNN tile classifier + DINOv2 binary OOD detection + board reconstruction.
 [Read more →](tile_and_board_classification.md){: .btn .btn-outline }
 </div>
 </div>
