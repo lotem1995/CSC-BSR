@@ -38,11 +38,11 @@ from embedding.qwen3 import QwenVisionEmbedding
 class FineTunedEmbeddingModel(EmbeddingModel):
     """
     Wrapper for fine-tuned models that extracts embeddings BEFORE the classifier head.
-    
+
     This class loads a checkpoint from fine_tune.py and provides the EmbeddingModel interface
     for use with FENClassifier.
     """
-    
+
     def __init__(self, checkpoint_path: str, base_model: EmbeddingModel):
         """
         Args:
@@ -51,31 +51,31 @@ class FineTunedEmbeddingModel(EmbeddingModel):
         """
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.base_model = base_model
-        
+
         # Load checkpoint
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         print(f"Loaded fine-tuned checkpoint from: {checkpoint_path}")
         print(f"Original model: {checkpoint.get('embedding_model_name', 'Unknown')}")
-        
+
         # The base_model now has fine-tuned weights if strategy was 'backbone'
         # For 'head-only' strategy, base_model weights are unchanged (only classifier was trained)
         # For 'lora' strategy, the LoRA adapters are merged into the model
-        
+
         # We only use the base_model for embeddings, not the classifier head
         self.embedding_dim = base_model.get_embedding_dim()
-        
+
     def extract_embedding(self, image: Image.Image) -> torch.Tensor:
         """Extract embedding from fine-tuned model (before classifier head)."""
         return self.base_model.extract_embedding(image)
-    
+
     def extract_batch_embeddings(self, images: List[Image.Image]) -> torch.Tensor:
         """Extract batch embeddings from fine-tuned model (before classifier head)."""
         return self.base_model.extract_batch_embeddings(images)
-    
+
     def get_embedding_dim(self) -> int:
         """Return embedding dimension."""
         return self.embedding_dim
-    
+
     def __repr__(self):
         return f"FineTunedEmbeddingModel({self.base_model.__class__.__name__})"
 
@@ -85,7 +85,7 @@ class FineTunedDINOBackbone(EmbeddingModel):
     Special wrapper for DINO models fine-tuned with 'backbone' strategy.
     Loads the fine-tuned backbone weights directly.
     """
-    
+
     def __init__(self, checkpoint_path: str, model_size: str = "small"):
         """
         Args:
@@ -93,31 +93,31 @@ class FineTunedDINOBackbone(EmbeddingModel):
             model_size: 'small', 'base', 'large', or 'giant'
         """
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         # Create base DINO model
         base_dino = DINOv2Embedding(model_size=model_size)
-        
+
         # Load fine-tuned backbone weights
         checkpoint = torch.load(checkpoint_path, map_location=self.device)
         base_dino.model.load_state_dict(checkpoint['model'])
         base_dino.model.eval()  # Ensure eval mode after loading weights
         print(f"Loaded fine-tuned DINO backbone from: {checkpoint_path}")
-        
+
         self.base_dino = base_dino
         self.embedding_dim = base_dino.get_embedding_dim()
-        
+
     def extract_embedding(self, image: Image.Image) -> torch.Tensor:
         """Extract embedding from fine-tuned DINO backbone."""
         return self.base_dino.extract_embedding(image)
-    
+
     def extract_batch_embeddings(self, images: List[Image.Image]) -> torch.Tensor:
         """Extract batch embeddings from fine-tuned DINO backbone."""
         return self.base_dino.extract_batch_embeddings(images)
-    
+
     def get_embedding_dim(self) -> int:
         """Return embedding dimension."""
         return self.embedding_dim
-    
+
     def __repr__(self):
         return f"FineTunedDINOBackbone(size={self.base_dino.model_size})"
 
@@ -129,12 +129,12 @@ def load_finetuned_embedding_model(
 ) -> EmbeddingModel:
     """
     Factory function to load the appropriate fine-tuned embedding model.
-    
+
     Args:
         checkpoint_path: Path to checkpoint saved by fine_tune.py
         model_type: "qwen", "dino-small", "dino-base", etc.
         strategy: "head-only", "backbone", or "lora"
-        
+
     Returns:
         EmbeddingModel instance with fine-tuned weights
     """
@@ -145,7 +145,7 @@ def load_finetuned_embedding_model(
             return FineTunedDINOBackbone(checkpoint_path, model_size=size)
         else:
             raise ValueError("Backbone fine-tuning only supported for DINO models")
-    
+
     elif strategy == "head-only":
         # For head-only, the backbone is unchanged, so use the base model
         if model_type == "qwen":
@@ -155,13 +155,13 @@ def load_finetuned_embedding_model(
             base_model = DINOv2Embedding(model_size=size)
         else:
             raise ValueError(f"Unknown model type: {model_type}")
-        
+
         return FineTunedEmbeddingModel(checkpoint_path, base_model)
-    
+
     elif strategy == "lora":
         # For LoRA, need to load the merged model
         raise NotImplementedError("LoRA loading not yet implemented - use head-only or backbone")
-    
+
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
@@ -169,7 +169,7 @@ def load_finetuned_embedding_model(
 def parse_tile_coords(image_path: str) -> tuple:
     """
     Parse row and column from tile filename.
-    
+
     Tiles are named: *_tile_row{r}_column{c}_class{label}.png
     Returns (row, col) or raises ValueError if not parseable.
     """
@@ -228,7 +228,16 @@ def grid_search_optimization(classifier: FENClassifier, val_csv_path: str):
         img_path = Path(row['image'])
         if not img_path.is_absolute(): img_path = Path.cwd() / img_path
         image_paths.append(img_path)
-        true_labels.append(row['label'])
+        is_ood_item = False
+        if 'is_ood' in row:
+            val = row['is_ood']
+            # Handle 1, "1", True, "True"
+            is_ood_item = (val == 1) or (val is True) or (str(val).lower() == 'true')
+
+        if is_ood_item:
+            true_labels.append(17)  # OOD Label
+        else:
+            true_labels.append(int(row['label']))
 
     print(f"Extracting embeddings for {len(image_paths)} tiles (this takes a moment)...")
 
@@ -380,7 +389,16 @@ def evaluate_on_test_csv(
 
             with Image.open(img_path) as im:
                 tile_images.append(im.convert('RGB').copy())
-            true_labels.append(row['label'])
+            is_ood_item = False
+            if 'is_ood' in row:
+                val = row['is_ood']
+                # Handle 1, "1", True, "True"
+                is_ood_item = (val == 1) or (val is True) or (str(val).lower() == 'true')
+
+            if is_ood_item:
+                true_labels.append(17)  # OOD Label
+            else:
+                true_labels.append(int(row['label']))
 
         # Predict
         tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
@@ -495,12 +513,12 @@ def main():
     Main execution pipeline.
     """
     # ================= CONFIGURATION =================
-    CHECKPOINT_PATH = "embedding/chess_encoder_finetuned_dino-small_backbone.pt"
+    CHECKPOINT_PATH = "chess_encoder_finetuned_dino-small_backbone.pt"
     MODEL_TYPE = "dino-small"
     STRATEGY = "backbone"
 
     # [ADDED]: Binary Model Config
-    BINARY_MODEL_PATH = "embedding/binary_ood_dino_small_epoch3.pt"
+    BINARY_MODEL_PATH = "binary_ood_dino_small_epoch3.pt"
     BINARY_DINO_SIZE = "small"
 
     VAL_CSV = "data/splits/val.csv"
@@ -577,13 +595,22 @@ def main():
                 if not img_path.is_absolute(): img_path = Path.cwd() / img_path
                 with Image.open(img_path) as im:
                     tile_images.append(im.convert('RGB').copy())
-                board_state[parse_tile_coords(row['image'])] = row['label']
+
+                is_ood_item = False
+                if 'is_ood' in row:
+                    val = row['is_ood']
+                    is_ood_item = (val == 1) or (val is True) or (str(val).lower() == 'true')
+
+                if is_ood_item:
+                    board_state[parse_tile_coords(row['image'])] = 17
+                else:
+                    board_state[parse_tile_coords(row['image'])] = int(row['label'])
 
             tile_embeddings = embedding_model.extract_batch_embeddings(tile_images)
             classifier.add_fen_position(board_id, tile_embeddings, board_state)
 
         classifier.update_thresholds()
-        classifier.save("embedding/classifier_dino_small.pt")
+        classifier.save("classifier_dino_small.pt")
 
     # 5. EVALUATE
     if DO_EVALUATION:

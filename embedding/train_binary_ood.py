@@ -84,21 +84,13 @@ class BinaryDINOBackboneFineTuner:
         # 3. Return correct tensor on device
         return torch.cat(batch_x, dim=0).to(self.device)
 
-    def _get_binary_labels(self, raw_labels):
-        """
-        Map {0..16} -> 0 (ID)
-        Map {17}    -> 1 (OOD)
-        """
-        binary_labels = (raw_labels == 17).long()
-        return binary_labels.to(self.device)
-
     def train_batch(self, batch: Dict) -> float:
         self.model.train()
         self.classifier.train()
 
         # [CHANGED] Use _to_batch to handle resizing automatically
         x = self._to_batch(batch["image"])
-        labels = self._get_binary_labels(batch["label"])
+        labels = batch["is_ood"].long().to(self.device)
 
         # Forward Pass
         feats = self.model(x)
@@ -119,7 +111,7 @@ class BinaryDINOBackboneFineTuner:
 
         # [CHANGED] Use _to_batch here too
         x = self._to_batch(batch["image"])
-        labels = self._get_binary_labels(batch["label"])
+        labels = batch["is_ood"].long().to(self.device)
 
         feats = self.model(x)
         logits = self.classifier(feats)
@@ -159,8 +151,8 @@ def train_binary_ood(
     logger.info("Loading Datasets via get_train_dataloader...")
 
     # Passing resize=224 is safe now!
-    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers)  # default resize is 224
-    val_loader = get_val_dataloader(batch_size=batch_size, num_workers=num_workers)
+    train_loader = get_train_dataloader(batch_size=batch_size, num_workers=num_workers, consider_ood_as_class=True)
+    val_loader = get_val_dataloader(batch_size=batch_size, num_workers=num_workers, consider_ood_as_class=True)
 
     # 3. Training Loop
     logger.info("Starting Binary Training...")

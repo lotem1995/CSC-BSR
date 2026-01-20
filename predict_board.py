@@ -14,13 +14,11 @@ BINARY_GUARD_PATH = BASE_DIR / "binary_ood_dino_small_epoch3.pt"
 CLASSIFIER_DB_PATH = BASE_DIR / "classifier_dino_small.pt"
 
 # --- CONFIGURATION: CLASS MAPPING ---
-# LEFT SIDE: Your Model's IDs (from CLASS_MAP)
-# RIGHT SIDE: The Required Output IDs (0=WP, 1=WR... 12=Empty)
 INTERNAL_TO_OUTPUT = {
     0: 12,  # Model: empty        -> Target: 12
     1: 0,  # Model: white_pawn   -> Target: 0
-    2: 2,  # Model: white_knight -> Target: 2 (Match!)
-    3: 3,  # Model: white_bishop -> Target: 3 (Match!)
+    2: 2,  # Model: white_knight -> Target: 2
+    3: 3,  # Model: white_bishop -> Target: 3
     4: 1,  # Model: white_rook   -> Target: 1
     5: 4,  # Model: white_queen  -> Target: 4
     6: 5,  # Model: white_king   -> Target: 5
@@ -34,7 +32,7 @@ INTERNAL_TO_OUTPUT = {
 }
 
 # --- SETUP IMPORTS ---
-PROJECT_ROOT = BASE_DIR.parent
+PROJECT_ROOT = BASE_DIR
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 if str(BASE_DIR) not in sys.path:
@@ -49,46 +47,58 @@ except ImportError as e:
     print(f"Error importing modules: {e}")
     sys.exit(1)
 
-# --- INITIALIZATION ---
-print("Initializing Chess Predictor...")
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 1. Initialize Backbone
-if not BACKBONE_PATH.exists():
-    raise FileNotFoundError(f"Backbone model not found at {BACKBONE_PATH}")
-dino_model = DINOv2Embedding(model_size="small")
-checkpoint = torch.load(BACKBONE_PATH, map_location=DEVICE)
-if 'model' in checkpoint:
-    dino_model.model.load_state_dict(checkpoint['model'])
-else:
-    dino_model.model.load_state_dict(checkpoint)
-dino_model.model.eval()
+def load_models():
+    """
+    Initializes the DINO backbone, FEN Classifier, and OOD Guard.
 
-# 2. Initialize Classifier
-if not CLASSIFIER_DB_PATH.exists():
-    raise FileNotFoundError(f"Classifier DB not found at {CLASSIFIER_DB_PATH}")
-classifier = FENClassifier(embedding_extractor=dino_model)
-classifier.load(str(CLASSIFIER_DB_PATH))
+    Returns:
+        classifier (FENClassifier): The fully loaded classifier object ready for prediction.
+    """
+    print("Initializing Chess Predictor...")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# 3. Initialize Safety Guard
-if not BINARY_GUARD_PATH.exists():
-    raise FileNotFoundError(f"Binary Guard not found at {BINARY_GUARD_PATH}")
-classifier.set_binary_model(str(BINARY_GUARD_PATH), dino_size="small")
+    # 1. Initialize Backbone
+    if not BACKBONE_PATH.exists():
+        raise FileNotFoundError(f"Backbone model not found at {BACKBONE_PATH}")
 
-print("✓ Models Loaded Successfully.\n")
+    dino_model = DINOv2Embedding(model_size="small")
+    checkpoint = torch.load(BACKBONE_PATH, map_location=device)
+
+    if 'model' in checkpoint:
+        dino_model.model.load_state_dict(checkpoint['model'])
+    else:
+        dino_model.model.load_state_dict(checkpoint)
+
+    dino_model.model.eval()
+
+    # 2. Initialize Classifier
+    if not CLASSIFIER_DB_PATH.exists():
+        raise FileNotFoundError(f"Classifier DB not found at {CLASSIFIER_DB_PATH}")
+
+    classifier = FENClassifier(embedding_extractor=dino_model)
+    classifier.load(str(CLASSIFIER_DB_PATH))
+
+    # 3. Initialize Safety Guard
+    if not BINARY_GUARD_PATH.exists():
+        raise FileNotFoundError(f"Binary Guard not found at {BINARY_GUARD_PATH}")
+
+    classifier.set_binary_model(str(BINARY_GUARD_PATH), dino_size="small")
+
+    print("✓ Models Loaded Successfully.\n")
+    return classifier
 
 
-def predict_board(image: np.ndarray) -> torch.Tensor:
+def predict_board(image: np.ndarray, classifier: FENClassifier) -> torch.Tensor:
     """
     Predict the chessboard state from a single RGB image.
 
     Args:
         image (np.ndarray): Input image array (H, W, 3) in RGB format.
-                            Dtype uint8, Range [0, 255].
+        classifier (FENClassifier): The loaded classifier object.
 
     Returns:
         torch.Tensor: Shape (8, 8), Dtype int64, on CPU.
-                      Values 0-14 per strict encoding.
     """
     # 1. Validation
     if image.ndim != 3 or image.shape[2] != 3:
@@ -130,7 +140,7 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
                 with Image.open(tile_path) as img:
                     tile_images.append(img.convert("RGB").copy())
 
-    # 3. Embed
+    # 3. Embed (Using passed classifier)
     tile_embeddings = classifier.embedding_extractor.extract_batch_embeddings(tile_images)
 
     # 4. Predict
@@ -145,33 +155,37 @@ def predict_board(image: np.ndarray) -> torch.Tensor:
     internal_preds = preds.copy()
     internal_preds[is_ood] = 17
 
-    # 6. Apply Class Mapping (Internal -> Target 0-14)
-    # This translates your CLASS_MAP IDs to the required Output IDs
+    # 6. Apply Class Mapping
     final_preds = np.array([INTERNAL_TO_OUTPUT.get(p, 13) for p in internal_preds])
 
-    # 7. Return Tensor (8x8)
+    # 7. Return Tensor
     return torch.from_numpy(final_preds).long().cpu().view(8, 8)
 
 
-# --- TEST BLOCK ---
+# --- MAIN EXECUTION ---
 if __name__ == "__main__":
-    target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_039032.jpg"
+    # 1. Load Models (Once)
+    loaded_classifier = load_models()
+
+    # 2. Define Image Path
+    target_image = PROJECT_ROOT / "data" / "game4_per_frame" / "tagged_images" / "frame_039084.jpg"
     print(f"Looking for image at: {target_image}")
 
     if target_image.exists():
         print("✓ File found. Running prediction...")
         try:
+            # 3. Load Image
             with Image.open(target_image) as img:
                 real_img_np = np.array(img.convert("RGB"))
 
-            result_tensor = predict_board(real_img_np)
+            # 4. Predict (Pass image AND classifier)
+            result_tensor = predict_board(real_img_np, loaded_classifier)
 
             print("\n✓ Prediction Successful!")
             print(f"Output Shape: {result_tensor.shape}")
 
-            # --- SAVE VISUALIZATION ---
+            # 5. Visualization
             print("\nGenerating visual board representation...")
-
             results_dir = PROJECT_ROOT / "results"
             if not results_dir.exists():
                 os.makedirs(results_dir)
@@ -179,12 +193,11 @@ if __name__ == "__main__":
             output_vis_path = str(results_dir / "prediction_visual.png")
 
             generate_ood_board(
-                result_tensor,  # Passing Tensor directly
+                result_tensor,
                 output_vis_path
             )
 
             print(f"✓ Visualization saved to: {output_vis_path}")
-            print(f"  (Check this image to verify the 'Nonsense' is gone!)")
 
         except Exception as e:
             print(f"\n❌ Prediction Failed: {e}")

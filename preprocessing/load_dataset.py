@@ -47,7 +47,7 @@ class ChessTilesCSV(Dataset):
         if self.use_embeddings and emb:
             features = torch.as_tensor(np.load(self.root / emb))
             # Note: Transforms are usually not applied to embeddings
-            return {"image": features, "label": label, "board_id": row.board_id, "path": str(img_path)}
+            return {"image": features, "label": label, "board_id": row.board_id, "path": str(img_path), "is_ood": row.is_ood}
 
         # CASE B: Loading Images
         else:
@@ -61,7 +61,7 @@ class ChessTilesCSV(Dataset):
                     # Default if no transform provided
                     image_tensor = torch.from_numpy(np.array(img)).permute(2, 0, 1).float() / 255.0
 
-            return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path)}
+            return {"image": image_tensor, "label": label, "board_id": row.board_id, "path": str(img_path), "is_ood": row.is_ood}
 
 
 def paint_camel():
@@ -88,7 +88,7 @@ def paint_camel():
     print(art)
 
 
-def get_train_dataloader(batch_size, num_workers):
+def get_train_dataloader(batch_size, num_workers, consider_ood_as_class=False):
     # --- CONFIGURATION ---
     rotation_jitter = 5  # Change this number to increase/decrease the "wiggle"
 
@@ -116,26 +116,39 @@ def get_train_dataloader(batch_size, num_workers):
 
     # 1. Instantiate your dataset
     dataset = ChessTilesCSV(splits_dir / "train.csv", root=path_root, transform=train_transforms)
-    labels = dataset.df['label'].values
 
-    class_counts = dataset.df['label'].value_counts().sort_index()
+    # --- LOGIC UPDATE FOR OOD SAMPLING ---
+    if consider_ood_as_class:
+        # Create a copy of labels so we don't modify the original dataframe
+        labels = dataset.df['label'].copy()
+
+        # Ensure 'is_ood' is treated as a boolean mask
+        # This handles cases where it might be 0/1 int or True/False bool
+        is_ood_mask = dataset.df['is_ood'].astype(bool)
+
+        # Force the label to 17 where is_ood is True
+        labels[is_ood_mask] = 17
+
+        # Convert to numpy array for consistency with the 'else' block
+        labels = labels.values
+    else:
+        # Original behavior: ignore OOD flag, use underlying label (e.g., 14)
+        labels = dataset.df['label'].values
+    # -------------------------------------
+
+    # Calculate counts based on the *effective* labels (labels variable)
+    # We convert to Series first to use value_counts() easily
+    class_counts = pd.Series(labels).value_counts().sort_index()
 
     # Calculate weight per class
     class_weights = 1.0 / class_counts
     class_weights_dict = class_weights.to_dict()
 
-    # Map weights to each sample
+    # Map weights to each sample using the effective 'labels' list
     sample_weights = [class_weights_dict.get(label, 0) for label in labels]
     sample_weights = torch.DoubleTensor(sample_weights)
 
     # Create Sampler
-    sampler = WeightedRandomSampler(
-        weights=sample_weights,
-        num_samples=len(sample_weights),
-        replacement=True
-    )
-
-    # Create the Sampler
     sampler = WeightedRandomSampler(
         weights=sample_weights,
         num_samples=len(sample_weights),
@@ -155,8 +168,7 @@ def get_train_dataloader(batch_size, num_workers):
     return train_loader
 
 
-def get_val_dataloader(batch_size=64, num_workers=4):
-
+def get_val_dataloader(batch_size=64, num_workers=4, consider_ood_as_class=False):
     # Simple transform for validation (Resize + ToTensor)
     val_transform = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -165,6 +177,17 @@ def get_val_dataloader(batch_size=64, num_workers=4):
 
     # Pass the clean transforms to the dataset
     val_dataset = ChessTilesCSV(splits_dir / "val.csv", root=path_root, transform=val_transform)
+
+    # --- LOGIC UPDATE FOR OOD LABELS ---
+    if consider_ood_as_class:
+        # Modify DF in-place so validation metrics see label=17
+        if val_dataset.df['is_ood'].dtype == object:
+            is_ood_mask = val_dataset.df['is_ood'].apply(lambda x: str(x).lower() in ['true', '1'])
+        else:
+            is_ood_mask = val_dataset.df['is_ood'].astype(bool)
+
+        val_dataset.df.loc[is_ood_mask, 'label'] = 17
+    # -----------------------------------
 
     val_loader = DataLoader(
         val_dataset,
