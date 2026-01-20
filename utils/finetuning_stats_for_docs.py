@@ -418,12 +418,13 @@ def plot_model_comparison(stats: GlobalStats, out_dir: Path) -> Optional[Path]:
             height = bar.get_height()
             ax.text(
                 bar.get_x() + bar.get_width() / 2.0,
-                height + 1,
+                height / 2,
                 f"{height:.1f}%",
                 ha="center",
-                va="bottom",
+                va="center",
                 fontsize=9,
                 color=COLORS["text"],
+                fontweight="bold",
             )
 
     add_labels(bars1)
@@ -503,10 +504,10 @@ def plot_training_curves(stats: GlobalStats, out_dir: Path) -> Optional[Path]:
                 height = bar.get_height()
                 ax.text(
                     bar.get_x() + bar.get_width() / 2.0,
-                    height + 0.03,
+                    height / 2,
                     f"{height:.3f}",
                     ha="center",
-                    va="bottom",
+                    va="center",
                     fontsize=9,
                     color=COLORS["text"],
                     fontweight="bold",
@@ -708,6 +709,24 @@ def plot_strategy_comparison(stats: GlobalStats, out_dir: Path) -> Optional[Path
         alpha=0.9,
     )
 
+    # Add value labels to bars
+    def add_labels(bars):
+        for bar in bars:
+            height = bar.get_height()
+            ax1.text(
+                bar.get_x() + bar.get_width() / 2.0,
+                height / 2,
+                f"{height:.1f}%",
+                ha="center",
+                va="center",
+                fontsize=9,
+                color=COLORS["text"],
+                fontweight="bold",
+            )
+
+    add_labels(bars1)
+    add_labels(bars2)
+
     ax1.set_xlabel("Strategy", fontsize=11, fontweight="bold")
     ax1.set_ylabel("Score (%)", fontsize=11, fontweight="bold")
     ax1.set_title("Average Performance by Strategy", fontsize=12, fontweight="bold")
@@ -718,6 +737,20 @@ def plot_strategy_comparison(stats: GlobalStats, out_dir: Path) -> Optional[Path
 
     # Plot 2: Validation loss
     bars3 = ax2.bar(x, avg_val_loss, color=COLORS["warn"], alpha=0.9)
+
+    # Add value labels to validation loss bars
+    for bar in bars3:
+        height = bar.get_height()
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2.0,
+            height / 2,
+            f"{height:.4f}",
+            ha="center",
+            va="center",
+            fontsize=9,
+            color=COLORS["text"],
+            fontweight="bold",
+        )
 
     ax2.set_xlabel("Strategy", fontsize=11, fontweight="bold")
     ax2.set_ylabel("Validation Loss", fontsize=11, fontweight="bold")

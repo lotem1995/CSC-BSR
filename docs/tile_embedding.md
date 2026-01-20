@@ -7,7 +7,7 @@ nav_order: 3
 
 ## Tile Embedding
 
-The next step in the architecture is a transformer-based encoding of tile images. Instead of creating an embedding from scratch, we opted to fine-tune an existing transformer for this task. We evaluated several models, including LoRA fine-tuning of Qwen3-VL and DINOv2 fine-tuning, and ultimately selected a **fine-tuned DINOv2 model** for tile embedding. This model takes a single chess tile image as input and outputs a **1024-dimensional embedding vector** representing the visual content and piece identity.
+The next step in the architecture is a transformer-based encoding of tile images. Instead of creating an embedding from scratch, we opted to fine-tune an existing transformer for this task. We evaluated several models, including LoRA fine-tuning of Qwen/Qwen3-VL-2B-Instruct and DINOv2 fine-tuning, and ultimately selected a **fine-tuned DINOv2-small model** for tile embedding. This model takes a single chess tile image as input and outputs a **384-dimensional embedding vector** representing the visual content and piece identity.
 
 For fine-tuning DINOv2, we tested two strategies: training only the classification head (linear probing) and fine-tuning the entire backbone. We found that **backbone fine-tuning** yielded superior results with **95.78% balanced accuracy**. While we initially used a classification head as a training objective to provide supervision, we discard it during inference and use only the learned backbone embeddings, which capture chess-specific visual patterns.
 
@@ -27,7 +27,7 @@ While generic vision models provide strong foundational representations, they la
 
 2. **Fine-Grained Visual Discrimination**: Unlike models trained primarily for object classification, DINOv2 excels at distinguishing subtle visual differences. For chess tiles, this means it can discriminate between piece types, colors, board textures, and lighting conditions.
 
-3. **Compact yet Expressive Embeddings**: The base model produces 768-dimensional embeddings (or 1024-dim for the large variant), which is more computationally efficient than VLMs like Qwen3-VL while remaining sufficiently expressive.
+3. **Compact yet Expressive Embeddings**: The DINOv2-small variant we use produces 384-dimensional embeddings (base produces 768-dim and large 1024-dim), which is more computationally efficient than VLMs like Qwen/Qwen3-VL-2B-Instruct while remaining sufficiently expressive.
 
 4. **Fast Inference**: DINOv2 is a pure vision model without language understanding overhead, making it suitable for real-time chess board analysis.
 
@@ -41,8 +41,8 @@ While generic vision models provide strong foundational representations, they la
 | --- | --- | --- | --- |
 | **DINOv2** | Backbone | **95.78%** | **0.1720** |
 | DINOv2 | Head-only | 75.24% | 0.7692 |
-| Qwen3-VL | LoRA | 77.82% | 0.7651 |
-| Qwen3-VL | Head-only | 68.89% | 0.9517 |
+| Qwen/Qwen3-VL-2B-Instruct | LoRA | 77.82% | 0.7651 |
+| Qwen/Qwen3-VL-2B-Instruct | Head-only | 68.89% | 0.9517 |
 
 {: .highlight }
 > **The decision**: DINOv2's self-supervised pre-training makes it uniquely suited for fine-grained visual discrimination in chess tile analysis. Once fine-tuned, it achieves near-perfect accuracy while remaining computationally efficient.
@@ -85,7 +85,7 @@ Output: Embedding (1024-dim)
 
 ## Fine-Tuning Vision Models
 
-While generic vision models provide strong foundations, they aren't inherently "chess-aware." We bridge this gap by fine-tuning backbones like **DINOv2** and **Qwen3-VL** to recognize specific chess pieces and tile states with high precision.
+While generic vision models provide strong foundations, they aren't inherently "chess-aware." We bridge this gap by fine-tuning backbones like **DINOv2** and **Qwen/Qwen3-VL-2B-Instruct** to recognize specific chess pieces and tile states with high precision.
 
 <div class="bs-cards" markdown="block">
 
@@ -95,7 +95,7 @@ While generic vision models provide strong foundations, they aren't inherently "
 
 1. **Head-Only (Linear Probing)**: Keep the vision backbone frozen and only train a 13-class MLP classifier on top of the extracted embeddings. Most efficient approach but limits adaptability.
 
-2. **LoRA (Low-Rank Adaptation)**: Used specifically for **Qwen3-VL**, this method adapts only 1%–2% of the model's parameters through low-rank decomposition. Uses **10x less VRAM** and is **10x faster** than full fine-tuning.
+2. **LoRA (Low-Rank Adaptation)**: Used specifically for **Qwen/Qwen3-VL-2B-Instruct**, this method adapts only 1%–2% of the model's parameters through low-rank decomposition. Uses **10x less VRAM** and is **10x faster** than full fine-tuning.
 
 3. **Backbone Fine-Tuning**: Unfreeze the entire vision model and train it end-to-end with the classifier. Allows learning of chess-specific visual features but requires more GPU memory (~8-11GB).
 
@@ -111,11 +111,11 @@ Results from training for 1 epoch with batch size 2 on our cluster:
 | --- | --- | --- | --- | --- |
 | **DinoV2 (Backbone)** | backbone | **95.78%** | **95.63%** | **0.1720** |
 | DinoV2 (Head Only) | head-only | 75.24% | 74.09% | 0.7692 |
-| Qwen3-VL (LoRA) | lora | 77.82% | 78.16% | 0.7651 |
-| Qwen3-VL | head-only | 68.89% | 69.46% | 0.9517 |
+| Qwen/Qwen3-VL-2B-Instruct (LoRA) | lora | 77.82% | 78.16% | 0.7651 |
+| Qwen/Qwen3-VL-2B-Instruct | head-only | 68.89% | 69.46% | 0.9517 |
 
 {: .highlight }
-> **Why DINOv2 Backbone Wins**: While Qwen3-VL is powerful, DINOv2's self-supervised pre-training excels at fine-grained visual discrimination. The 20+ percentage point advantage validates this approach.
+> **Why DINOv2 Backbone Wins**: While Qwen/Qwen3-VL-2B-Instruct is powerful, DINOv2's self-supervised pre-training excels at fine-grained visual discrimination. The 20+ percentage point advantage validates this approach.
 
 </div>
 
@@ -177,7 +177,7 @@ class EmbeddingModel(ABC):
         """Return the dimension of embeddings."""
         pass
 ```
-
+{: .decision }
 **Why this design?** The interface allows fine-tuning code to remain model-agnostic. A single `FineTuner` class can work with any embedding model without modification.
 
 ### DINOv2 Implementation (dinov2.py)
@@ -203,10 +203,10 @@ transforms.Compose([
 - Feeds through the model in a single forward pass
 - Returns CPU-resident embeddings to free GPU memory
 
-### Qwen3-VL Implementation (qwen3.py)
+### Qwen/Qwen3-VL-2B-Instruct Implementation (qwen3.py)
 
 **4-Bit Quantization**:
-To fit Qwen3-VL's 2B parameters into a single 11GB GPU, the implementation uses:
+To fit Qwen/Qwen3-VL-2B-Instruct's 2B parameters into a single 8GB GPU, the implementation uses:
 - `bitsandbytes` with NF4 (Normal Float 4-bit) quantization
 - Double quantization for additional compression
 - Compute dtype: bfloat16 (fast and low-precision)
@@ -255,7 +255,7 @@ class FineTuner:
             weight_decay=0.01
         )
 ```
-
+{: .decision }
 **Key Design Choices**:
 - The classification head is **adaptive**: it automatically scales to the embedding dimension
 - **Dropout (0.2)** prevents overfitting on small chess datasets
@@ -329,7 +329,7 @@ def evaluate_batch(self, batch: Dict) -> Tuple[float, float, float]:
     
     return loss.item(), balanced_acc, f1
 ```
-
+{: .decision }
 **Why balanced accuracy and F1?** Chess datasets are imbalanced (many more empty squares than rare pieces). These metrics provide meaningful evaluation beyond raw accuracy.
 
 #### 3. Backbone Fine-Tuning (DINOBackboneFineTuner)
@@ -347,7 +347,7 @@ class DINOBackboneFineTuner:
             {"params": self.classifier.parameters(), "lr": 1e-4}  # Classifier: aggressive
         ], weight_decay=0.01)
 ```
-
+{: .decision }
 **Why two learning rates?**
 - The backbone is already well-trained (ImageNet + self-supervised). Large updates would destroy learned features.
 - The classifier head is randomly initialized and needs more aggressive updates.

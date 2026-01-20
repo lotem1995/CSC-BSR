@@ -1,0 +1,78 @@
+{
+  "total_tiles": 38016,
+  "total_ood_tiles": 562,
+  "total_boards": 594,
+  "total_games": 10,
+  "overall_class_counts": {
+    "0": 25073,
+    "1": 3297,
+    "2": 658,
+    "3": 611,
+    "4": 841,
+    "5": 342,
+    "6": 585,
+    "11": 3123,
+    "12": 500,
+    "13": 666,
+    "14": 841,
+    "15": 339,
+    "16": 578
+  },
+  "per_split": {
+    "train": {
+      "name": "train",
+      "tiles": 21312,
+      "boards": 333,
+      "games": 8,
+      "ood_tiles": 182,
+      "nonempty_tiles": 8119,
+      "tiles_per_board_min": 64,
+      "tiles_per_board_median": 64.0,
+      "tiles_per_board_mean": 64.0,
+      "tiles_per_board_max": 64,
+      "boards_complete_pct": 100.0,
+      "missing_images": 0,
+      "embedding_present": 0
+    },
+    "val": {
+      "name": "val",
+      "tiles": 4928,
+      "boards": 77,
+      "games": 1,
+      "ood_tiles": 45,
+      "nonempty_tiles": 1734,
+      "tiles_per_board_min": 64,
+      "tiles_per_board_median": 64.0,
+      "tiles_per_board_mean": 64.0,
+      "tiles_per_board_max": 64,
+      "boards_complete_pct": 100.0,
+      "missing_images": 0,
+      "embedding_present": 0
+    },
+    "test": {
+      "name": "test",
+      "tiles": 11776,
+      "boards": 184,
+      "games": 1,
+      "ood_tiles": 335,
+      "nonempty_tiles": 2528,
+      "tiles_per_board_min": 64,
+      "tiles_per_board_median": 64.0,
+      "tiles_per_board_mean": 64.0,
+      "tiles_per_board_max": 64,
+      "boards_complete_pct": 100.0,
+      "missing_images": 0,
+      "embedding_present": 0
+    }
+  },
+  "split_hygiene": {
+    "board_overlap_train_val": 0,
+    "board_overlap_train_test": 0,
+    "board_overlap_val_test": 0,
+    "game_overlap_train_val": 0,
+    "game_overlap_train_test": 0,
+    "game_overlap_val_test": 0
+  },
+  "jsd_train_test": 0.024798890220346214,
+  "config": {}
+}

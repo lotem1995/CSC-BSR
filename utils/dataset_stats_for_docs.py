@@ -33,6 +33,7 @@ import json
 import math
 import os
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -153,8 +154,9 @@ def setup_boardstate_matplotlib(style_path: Optional[Path] = None) -> None:
     if style_path and style_path.exists():
         try:
             plt.style.use(str(style_path))
-        except Exception:
-            pass
+            return
+        except Exception as e:
+            print(f"Warning: Could not load style file {style_path}: {e}", file=sys.stderr)
 
     plt.rcParams.update(
         {
@@ -448,7 +450,8 @@ def compute_dataloader_stats(train_df: pd.DataFrame) -> Dict[str, DataloaderStat
 
 def _save_fig(fig, out_path: Path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150, facecolor=COLORS["bg"], bbox_inches="tight")
+    facecolor = plt.rcParams.get("savefig.facecolor", COLORS["bg"])
+    fig.savefig(out_path, dpi=150, facecolor=facecolor, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -829,7 +832,7 @@ def main() -> int:
     )
     ap.add_argument("--json-out", type=Path, default=None, help="Optional JSON stats output (default: out-dir/stats.json)")
     ap.add_argument("--config", type=Path, default=None, help="Optional dataset_config.yaml to document tile_size/tile_overlap/seed")
-    ap.add_argument("--style", type=Path, default=Path("styles/boardstate-dark.mplstyle"), help="Optional matplotlib style")
+    ap.add_argument("--style", type=Path, default=None, help="Optional matplotlib style")
     ap.add_argument("--expected-tiles-per-board", type=int, default=DEFAULT_EXPECTED_TILES_PER_BOARD)
     ap.add_argument("--no-plots", action="store_true", help="Skip plot generation")
 
@@ -837,6 +840,12 @@ def main() -> int:
 
     # Load splits
     root = args.root.expanduser().resolve()
+    
+    # Resolve style path - if provided, make it absolute; otherwise use default
+    if args.style is None:
+        args.style = Path(__file__).parent / "styles" / "boardstate-dark.mplstyle"
+    else:
+        args.style = args.style.expanduser().resolve()
     splits_dir = args.splits_dir.expanduser().resolve()
 
     dfs: Dict[str, pd.DataFrame] = {}

@@ -1,32 +1,55 @@
-# BoardState — Light
+# BoardState — Light (robust across Matplotlib versions)
 
-figure.facecolor:        #FBFBFD
-axes.facecolor:          #FFFFFF
-savefig.facecolor:       #FBFBFD
+# --- Figure / Axes surfaces ---
+figure.facecolor: "#FBFBFD"
+axes.facecolor: "#FFFFFF"
+savefig.facecolor: "#FBFBFD"
 
-text.color:              #141824
-axes.labelcolor:         #141824
-axes.titlecolor:         #0E1220
-xtick.color:             #5B667A
-ytick.color:             #5B667A
+# --- Text ---
+text.color: "#141824"
+axes.labelcolor: "#141824"
+axes.titlecolor: "#0E1220"
+xtick.color: "#5B667A"
+ytick.color: "#5B667A"
 
-axes.prop_cycle: cycler('color', ['#5B46D6', '#219653', '#F2994A', '#2D9CDB', '#EB5757', '#9B51E0'])
+# --- Lines / color cycle ---
+axes.prop_cycle: cycler(color=["#5B46D6", "#219653", "#F2994A", "#2D9CDB", "#EB5757", "#9B51E0"])
 
-axes.edgecolor:          #D8DDEA
-axes.linewidth:          1.0
-grid.color:              #D8DDEA
-grid.linewidth:          0.8
-grid.alpha:              0.8
-axes.grid:               True
-axes.axisbelow:          True
+# --- Grid / spines ---
+axes.edgecolor: "#D8DDEA"
+axes.linewidth: 1.0
+grid.color: "#D8DDEA"
+grid.linewidth: 0.8
+grid.alpha: 0.8
+axes.grid: True
+axes.axisbelow: True
 
-font.family:             sans-serif
-font.sans-serif:         Inter, DejaVu Sans, Arial
+# --- Ticks ---
+xtick.direction: out
+ytick.direction: out
+xtick.major.size: 4
+ytick.major.size: 4
+xtick.minor.size: 2
+ytick.minor.size: 2
 
-legend.frameon:          True
-legend.facecolor:        #FFFFFF
-legend.edgecolor:        #D8DDEA
-legend.framealpha:       0.95
+# --- Fonts ---
+font.family: sans-serif
+font.sans-serif: Inter, DejaVu Sans, Arial
+axes.titlesize: 14
+axes.labelsize: 12
+xtick.labelsize: 10
+ytick.labelsize: 10
+legend.fontsize: 10
 
-savefig.dpi:             200
-figure.dpi:              110
+# --- Legend ---
+legend.frameon: True
+legend.facecolor: "#FFFFFF"
+legend.edgecolor: "#D8DDEA"
+legend.framealpha: 0.95
+
+# --- Saving ---
+savefig.dpi: 200
+figure.dpi: 110
+
+# --- Patches ---
+patch.edgecolor: "#D8DDEA"
