@@ -23,7 +23,7 @@ nav_order: 99
 ## What didn’t work
 
 ### 1) DSPy + local LLM (Ollama) for classification
-We started with a "VLM / prompting first" approach in [DSPy-Classifier/dspy-chess-classifier.py](../DSPy-Classifier/dspy-chess-classifier.py).
+We started with a "VLM / prompting first" approach in [DSPy-Classifier/dspy-chess-classifier.py](https://github.com/lotem1995/CSC-BSR/blob/main/DSPy-Classifier/dspy-chess-classifier.py).
 
 {: .warning }
 DSPy did not integrate cleanly with Ollama for our setup.
@@ -35,26 +35,19 @@ DSPy did not integrate cleanly with Ollama for our setup.
 {: .decision }
 We moved to a vision-encoder + lightweight head pipeline, where inputs/outputs are deterministic and easier to debug.
 
-<details>
-	<summary><strong>Code map (DSPy attempt)</strong></summary>
+#### Code pointers (DSPy attempt)
+{: .repro }
+Start here if you want to reproduce/debug this attempt:
 
-	{: .repro }
-	Where the logic lives and what it does:
-
-	- [DSPy-Classifier/dspy-chess-classifier.py](../DSPy-Classifier/dspy-chess-classifier.py): core DSPy program.
-		- `Config` + `setup_dspy()`: configures `dspy.LM` with `ollama_chat/<model>` and an Ollama `api_base`.
-		- `BoardStateSignature` / `PieceClassificationSignature`: output schemas for “whole board in one call” vs “single square”.
-		- `ChessPieceClassifier.forward()`: preferred path (1 call per frame) returning JSON + FEN + confidence.
-		- `ChessPieceClassifier.forward_square()`: legacy per-square call; used by `evaluate()`.
-		- `load_real_dataset()`: expands each FEN into 64 square-level examples (useful for metrics, expensive).
-		- `DSPyOptimizer.optimize()`: tries `BootstrapFewShot` to auto-select demonstrations and improve a metric.
-
-	- [DSPy-Classifier/train_chess_classifier.py](../DSPy-Classifier/train_chess_classifier.py): training/cluster wrapper.
-		- Handles SLURM env detection, logging, checkpoint folders, and dynamic import of the classifier module.
-</details>
+- [DSPy-Classifier/dspy-chess-classifier.py](https://github.com/lotem1995/CSC-BSR/blob/main/DSPy-Classifier/dspy-chess-classifier.py): main DSPy program
+	- `Config` / `setup_dspy()`: wires DSPy to `ollama_chat/<model>` + `api_base`
+	- `ChessPieceClassifier.forward()`: whole-board (preferred)
+	- `ChessPieceClassifier.forward_square()`: per-square (used by evaluation)
+	- `DSPyOptimizer.optimize()`: tries `BootstrapFewShot`
+- [DSPy-Classifier/train_chess_classifier.py](https://github.com/lotem1995/CSC-BSR/blob/main/DSPy-Classifier/train_chess_classifier.py): SLURM/cluster training wrapper + checkpoint/log handling
 
 ### 2) VAE-based OOD detection
-We also explored a VAE as an out-of-distribution detector (see the code in [VAE/](../VAE/)).
+We also explored a VAE as an out-of-distribution detector (see the code in [VAE/](https://github.com/lotem1995/CSC-BSR/tree/main/VAE/)).
 
 {: .result }
 It did not perform well enough to justify the complexity.
@@ -72,35 +65,16 @@ Directions we tested:
 {: .note }
 In practice, the VAE tended to be sensitive to nuisance factors (lighting, motion blur, cropping) rather than “semantic OOD” in the chess sense.
 
-<details>
-	<summary><strong>Code map (VAE attempt)</strong></summary>
+#### Code pointers (VAE attempt)
+{: .repro }
+Start here if you want to rerun the OOD experiments:
 
-	{: .repro }
-	Where the logic lives and what it does:
-
-	- [VAE/VAE_nn.py](../VAE/VAE_nn.py): the model definition.
-		- Convolutional encoder/decoder with a latent vector.
-		- `loss_function()`: reconstruction MSE (sum) + KL divergence.
-
-	- [VAE/train_VAE.py](../VAE/train_VAE.py): training loop.
-		- Uses `preprocessing.load_dataset.get_train_dataloader()` / `get_val_dataloader()`.
-		- Early stopping + periodic checkpoints + “best model” saving.
-
-	- [VAE/model_evaluation.py](../VAE/model_evaluation.py): analysis scripts.
-		- Reconstruction-error anomaly ranking (`show_top_anomalies`).
-		- Multi-cycle drift computation (`get_multicycle_scores`).
-
-	- [VAE/detect_ood.py](../VAE/detect_ood.py): the OOD detector experiment.
-		- `predict_single_image_ood()`: encodes → decodes → re-encodes for `cycles` and sums latent drift.
-		- Scans a dataset and visualizes the top detected OOD samples.
-
-	- [VAE/calculate_treshold.py](../VAE/calculate_treshold.py): choosing hyperparameters.
-		- `find_optimal_amount_of_cycles()`: picks cycles by maximizing ID/OOD separation.
-		- `analyze_ood_threshold()`: ROC-based threshold selection.
-
-	- [VAE/single_photo.py](../VAE/single_photo.py): quick sanity check.
-		- Loads a checkpoint and visualizes reconstruction on a single tile image.
-</details>
+- [VAE/VAE_nn.py](https://github.com/lotem1995/CSC-BSR/blob/main/VAE/VAE_nn.py): VAE architecture + `loss_function()` (MSE + KL)
+- [VAE/train_VAE.py](https://github.com/lotem1995/CSC-BSR/blob/main/VAE/train_VAE.py): training loop (dataloaders + checkpoints + early stopping)
+- [VAE/model_evaluation.py](https://github.com/lotem1995/CSC-BSR/blob/main/VAE/model_evaluation.py): evaluation utilities (reconstruction error + drift)
+- [VAE/detect_ood.py](https://github.com/lotem1995/CSC-BSR/blob/main/VAE/detect_ood.py): single-image OOD via multi-cycle latent drift (`predict_single_image_ood()`)
+- [VAE/calculate_treshold.py](https://github.com/lotem1995/CSC-BSR/blob/main/VAE/calculate_treshold.py): cycle/threshold selection helpers
+- [VAE/single_photo.py](https://github.com/lotem1995/CSC-BSR/blob/main/VAE/single_photo.py): quick reconstruction visualization sanity-check
 
 ## Future work
 
