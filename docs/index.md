@@ -18,6 +18,22 @@ On this GitHub Pages site, we will explore the final architecture and our reason
 </div>
 
 {: .repro }
+## Motivation
+
+<div class="bs-cards" markdown="block">
+
+<div class="bs-card" markdown="block">
+### Why this project?
+We tackle a practical visual-understanding problem: given a single chessboard frame, identify and classify the pieces on every square and reconstruct the corresponding board state (FEN), while explicitly handling out-of-distribution content by flagging unexpected objects as OOD.
+</div>
+
+<div class="bs-card" markdown="block">
+### Why fine-tuning instead of training from scratch?
+Training strong vision models from the ground up is expensive; instead, we fine-tune a pre-trained ViT-based model to reuse prior visual knowledge and achieve high performance efficiently. This keeps the method accessible without HPC resources and reflects today’s memory and compute constraints—delivering strong results (95.4% overall accuracy) with a cost-effective training pipeline.
+</div>
+</div>
+
+{: .repro }
 ## Architecture
 
 <!-- Here, we will briefly describe the project's architecture. Each section has a dedicated page with more details. -->
@@ -26,18 +42,28 @@ On this GitHub Pages site, we will explore the final architecture and our reason
 <div class="bs-card" markdown="block">
 ### Pre-Processing
 Converting the frame into tile images and preparing the dataset.
+
 [Read more →](preprocessing.md){: .btn .btn-outline }
 </div>
 
 <div class="bs-card" markdown="block">
 ### Tile Embedding
 Fine-tuned DINOv2 backbone based tile embedding.
+
 [Read more →](tile_embedding.md){: .btn .btn-outline }
 </div>
 
 <div class="bs-card" markdown="block">
 ### Tile + Board Classification and board reconstruction
 KNN tile classifier + DINOv2 binary OOD detection + board reconstruction.
+
 [Read more →](tile_and_board_classification.md){: .btn .btn-outline }
+</div>
+
+<div class="bs-card" markdown="block">
+### What didn’t work + Future work
+A short postmortem of approaches we tried and why they didn’t pan out, plus ideas we would explore next.
+
+[Read more →](future_work.md){: .btn .btn-outline }
 </div>
 </div>
