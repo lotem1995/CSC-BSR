@@ -2,6 +2,8 @@
 
 This codebase supports Project 1 in “Introduction to Deep Learning” 2025~2026 at Ben Gurion University. The project’s objective is to classify the type of each square on a chessboard and reconstruct the entire board state from input data.
 
+This is a link to our drive - https://drive.google.com/drive/folders/1yPKveqW-QtuvII25boNpUeg8psyurwJX?usp=sharing
+
 - 🚀 [Quick Start](#setting-up-the-environment)
 - 🧠 [Run Predictions](#running-predictions-on-images)
 - 🏋️ [Training](#model-training-notes)
