@@ -49,6 +49,9 @@ For more information, check the [HuggingFace documentation](https://huggingface.
 ## Running predictions on images
 
 To predict the board state from a chessboard image, run the following command:
+```bash
+python predict_board.py
+```
 
 **What it does:**
 * Loads the fine-tuned DINO backbone, FEN classifier, and OOD guard models
@@ -59,6 +62,28 @@ To predict the board state from a chessboard image, run the following command:
 
 **Customizing the input image:**
 By default, the script processes `data/game4_per_frame/tagged_images/frame_039084.jpg`. To use a different image, modify the `target_image` variable in the `__main__` section of the script.
+You can also use these main functions to create your own testing script - a basic example would probably use these 3 functions: `load_models`, `predict_board`, `generate_ood_board` in a logic similar to this
+```python
+import numpy as np
+from PIL import Image
+from predict_board import load_models, predict_board
+from drawing.draw_board import generate_ood_board
+
+# 1. Initialize models once
+classifier = load_models()
+
+# 2. Load your image as a Numpy array (RGB)
+image_path = "path/to/your/chess_board.jpg"
+with Image.open(image_path) as img:
+    image_np = np.array(img.convert("RGB"))
+
+# 3. Run prediction
+prediction_tensor = predict_board(image_np, classifier)
+print("Prediction Tensor:\n", prediction_tensor)
+
+# 4. Save visualization
+generate_ood_board(prediction_tensor, "output_visualization.png")
+```
 
 **Output:**
 
