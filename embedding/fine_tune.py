@@ -32,7 +32,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from preprocessing.load_dataset import ChessTilesCSV, get_train_dataloader
 from sklearn.metrics import balanced_accuracy_score, f1_score, confusion_matrix
 
-from embedding_base import EmbeddingModel
+from embedding.embedding_base import EmbeddingModel
 from dinov2 import DINOv2Embedding
 
 from loguru import logger
