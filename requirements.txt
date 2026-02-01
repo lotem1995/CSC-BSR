@@ -42,7 +42,6 @@ timm
 tokenizers
 tqdm
 transformers
-triton
 typing_extensions
 tzdata
 urllib3
