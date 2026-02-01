@@ -17,6 +17,7 @@ To set up the Python environment, create a virtual environment using `venv` or `
 ```bash
 pip install -U pip
 pip install -r requirements.txt
+pip install -r requirements-gpu-linux.txt
 ```
 
 **Note:** This project was tested against Python 3.14, but should work with other versions as well.

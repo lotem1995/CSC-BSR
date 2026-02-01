@@ -16,9 +16,9 @@ try:
 except ImportError:
     yaml = None
 
-from handle_fen import fen_to_board_int
-from handle_game_CSV import pair_images_with_fens
-from splitting_images import slice_image_with_coordinates
+from preprocessing.handle_fen import fen_to_board_int
+from preprocessing.handle_game_CSV import pair_images_with_fens
+from preprocessing.splitting_images import slice_image_with_coordinates
 
 # =========================
 # CONSTANT RULES
